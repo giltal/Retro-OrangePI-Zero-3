@@ -1,0 +1,21 @@
+# <file system>	<mount pt>	<type>	<options>	<dump>	<pass>
+/dev/root	/		ext2	rw,noauto	0	1
+proc		/proc		proc	defaults	0	0
+devpts		/dev/pts	devpts	defaults,gid=5,mode=620,ptmxmode=0666	0	0
+tmpfs		/dev/shm	tmpfs	mode=1777	0	0
+tmpfs		/tmp		tmpfs	mode=1777	0	0
+tmpfs		/run		tmpfs	mode=0755,nosuid,nodev	0	0
+sysfs		/sys		sysfs	defaults	0	0
+
+# FAT32 ROM partition (SD card p2). The launcher hardcodes /opt/roms and scans
+# one subdirectory per system; see launcher/launcher.c. Built and pre-populated
+# by board/opi-zero3/post-image.sh so the card is usable straight after flashing.
+#
+# mmcblk0 is safe on the Zero3 because the SD slot is the only MMC host its DT
+# enables. The reference board had SD and SDIO Wi-Fi racing for the numbering,
+# and this entry pointed at the wrong device until mmc aliases pinned it. Revisit
+# if the UWE5622 Wi-Fi (mmc1) is ever enabled.
+#
+# umask=0022 rather than the vfat default so ROMs are world-readable; FAT has no
+# permission bits of its own, so they come from the mount options.
+/dev/mmcblk0p2	/opt/roms	vfat	rw,noatime,umask=0022,shortname=mixed,utf8	0	0

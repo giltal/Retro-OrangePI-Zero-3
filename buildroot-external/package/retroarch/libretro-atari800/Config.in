@@ -1,0 +1,8 @@
+config BR2_PACKAGE_LIBRETRO_ATARI800
+	bool "libretro-atari800"
+	depends on BR2_PACKAGE_RETROARCH
+	help
+	  libretro atari800 core: Atari 8-bit computers (400/800/XL/XE) and
+	  the Atari 5200 console.
+
+	  Handles .atr / .xex / .a52 / .cas images.

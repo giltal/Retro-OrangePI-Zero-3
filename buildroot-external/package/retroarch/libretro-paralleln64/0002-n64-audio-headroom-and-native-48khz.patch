@@ -1,0 +1,93 @@
+N64 audio: headroom, native 48 kHz, better resampler quality
+
+Three measured fixes to the core's audio backend.
+
+1. Clipping. 436 samples pinned at full scale in one session, peak 32768
+   (the clamp limit), audible as distortion. The clamp is in
+   convert_float_to_s16 after sinc resampling; sinc overshoots on
+   intersample peaks so near-0 dBFS material exceeds full scale even with
+   every gain stage at unity. Measured overshoot 1060 permille. Fixed by
+   attenuating before the resampler -- lowering the ALSA volume cannot
+   fix it, as the damage happens inside the core.
+
+2. Double resampling. The core targeted a hardcoded 44100 while the codec
+   runs at 48000, so audio was converted twice (32000->44100->48000).  
+   Targeting 48000 gives a single conversion at exactly 1.5 for a 32 kHz
+   game. Verified by capturing the stream: >16 kHz energy at -116 dB.
+
+3. Resampler quality raised from DONTCARE to HIGHER.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/mupen64plus-core/src/plugin/audio_libretro/audio_backend_libretro.c
++++ b/mupen64plus-core/src/plugin/audio_libretro/audio_backend_libretro.c
+@@ -78,7 +78,8 @@
+ 
+ void init_audio_libretro(unsigned max_audio_frames)
+ {
+-   retro_resampler_realloc(&resampler_audio_data, &resampler, "sinc", RESAMPLER_QUALITY_DONTCARE, 1.0);
++   retro_resampler_realloc(&resampler_audio_data, &resampler, "sinc",
++         RESAMPLER_QUALITY_HIGHER, 1.0);
+ 
+    MAX_AUDIO_FRAMES = max_audio_frames;
+ 
+@@ -120,6 +121,37 @@
+    ai->regs[AI_DACRATE_REG] = saved_ai_dacrate;
+ }
+ 
++/* RetroBPI: N64 audio fixes. Three changes, each measured on hardware.
++ *
++ * (1) HEADROOM. The output was clipping: 436 samples pinned at full scale in
++ *     one session, peak 32768 (the clamp limit), heard as "a bit dirty".
++ *     The clamp is in convert_float_to_s16 AFTER sinc resampling, and sinc
++ *     overshoots on intersample peaks, so material mastered near 0 dBFS exceeds
++ *     full scale once resampled even with every gain stage at unity. Measured
++ *     overshoot was 1060 permille, i.e. 6% over. Attenuating on the way IN
++ *     fixes it; lowering the ALSA volume could not, because the damage is done
++ *     here. 0.8 = -1.94 dB, comfortably clear of the measured 1060.
++ *
++ * (2) NATIVE 48 kHz. The core resampled to a hardcoded 44100 while the codec
++ *     runs at 48000, so every sample went through two conversions:
++ *     32000 -> 44100 here and 44100 -> 48000 in the frontend. Targeting 48000
++ *     makes it a single conversion at exactly 1.5 for a 32 kHz game and lets
++ *     the frontend pass audio through untouched. Verified by capturing the
++ *     stream: energy above 16 kHz sits at -116 dB, HF/LF ratio 0.0001, i.e.
++ *     no audible aliasing.
++ *
++ * (3) RESAMPLER QUALITY. Was RESAMPLER_QUALITY_DONTCARE, which asks for
++ *     whatever is cheapest. Raised to HIGHER.
++ *
++ * NOTE: none of these was the main cause of the reported dirt. That was the
++ * emulator running at 87% of real time, with the frontend's dynamic rate
++ * control stretching audio to hide it -- fixed by rendering at the N64's
++ * native 320x240 instead of 640x480 (see the .opt file). These three remain
++ * worth having on their own merits.
++ */
++#define AUDIO_HEADROOM_GAIN 0.8f
++#define AUDIO_TARGET_RATE   48000.0
++
+ static void aiLenChanged(void* user_data, const void* buffer, size_t size)
+ {
+    size_t max_frames, remain_frames;
+@@ -143,8 +175,9 @@
+ 
+ audio_batch:
+    out               = NULL;
+-   ratio             = 44100.0 / GameFreq;
+-   max_frames        = (GameFreq > 44100) ? MAX_AUDIO_FRAMES : (size_t)(MAX_AUDIO_FRAMES / ratio - 1);
++   ratio             = AUDIO_TARGET_RATE / GameFreq;
++   max_frames        = (GameFreq > AUDIO_TARGET_RATE)
++      ? MAX_AUDIO_FRAMES : (size_t)(MAX_AUDIO_FRAMES / ratio - 1);
+    remain_frames     = 0;
+ 
+    if (frames > max_frames)
+@@ -158,7 +191,8 @@
+    data.input_frames = frames;
+    data.ratio        = ratio;
+ 
+-   convert_s16_to_float(audio_in_buffer_float, raw_data, frames * 2, 1.0f);
++   convert_s16_to_float(audio_in_buffer_float, raw_data, frames * 2,
++         AUDIO_HEADROOM_GAIN);
+    resampler->process(resampler_audio_data, &data);
+    convert_float_to_s16(audio_out_buffer_s16, audio_out_buffer_float, data.output_frames * 2);
+ 

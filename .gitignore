@@ -1,0 +1,17 @@
+# firmware/ is ALL build output, not source: the sdcard image (~3 GB),
+# kernels, DTBs, U-Boot. Every one is reproducible with scripts/build.sh.
+# Git stores a full copy of every changed binary, so tracking these would add
+# gigabytes per rebuild (the reference project learned this the hard way).
+firmware/
+
+# ROM archives: large, regenerable, and not ours to distribute.
+backup/
+
+# Scratch
+*.tmp
+*.orig
+*.rej
+
+# NOTE: buildroot-external/package/retroarch/retroarch/retro-assets IS tracked
+# deliberately -- retroarch.mk copies it into the target, so it is a build
+# input, not an output.

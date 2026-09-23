@@ -1,0 +1,7 @@
+mame2003-plus_input_interface = "retroarch"
+mame2003-plus_mame_remapping = "disabled"
+mame2003-plus_four_way_emulation = "original"
+mame2003-plus_rstick_to_btns = "disabled"
+mame2003-plus_tate_mode = "disabled"
+mame2003-plus_frameskip = "0"
+mame2003-plus_sample_rate = "48000"

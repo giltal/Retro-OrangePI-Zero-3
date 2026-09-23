@@ -1,0 +1,31 @@
+# pcsx_rearmed options, ported from the Lyra project (same Cortex-A7 class).
+#
+# The important ones:
+#   drc            ARM dynarec. Without it the interpreter is hopeless here.
+#   spu_thread     sound on its own thread; we have 4 cores, the emulator uses 1.
+#   frameskip auto lets it drop frames rather than run in slow motion.
+#   dithering off  costs image quality, buys fill rate -- this is software
+#                  rasterisation, the Mali-400 cannot help with it.
+#
+# Starting points, not measurements: nothing here has been profiled on this
+# board yet. If games run full speed, dithering and spu_interpolation are the
+# first things to turn back up.
+pcsx_rearmed_drc = "enabled"
+pcsx_rearmed_spu_thread = "enabled"
+pcsx_rearmed_gpu_thread_rendering = "sync"
+pcsx_rearmed_frameskip_type = "auto"
+pcsx_rearmed_frameskip_threshold = "33"
+pcsx_rearmed_frameskip_interval = "3"
+# Renamed upstream since the Lyra port: the core now reads
+# ..._v2 (libretro appends _v2 when an option's meaning changes).
+# The old key is silently ignored, so shipping it would have been a
+# line that looks configured and does nothing.
+pcsx_rearmed_neon_interlace_enable_v2 = "disabled"
+pcsx_rearmed_neon_enhancement_enable = "disabled"
+pcsx_rearmed_show_bios_bootlogo = "disabled"
+pcsx_rearmed_dithering = "disabled"
+pcsx_rearmed_nocdaudio = "enabled"
+pcsx_rearmed_noxadecoding = "enabled"
+pcsx_rearmed_spu_interpolation = "off"
+pcsx_rearmed_icache_emulation = "disabled"
+pcsx_rearmed_exception_emulation = "enabled"

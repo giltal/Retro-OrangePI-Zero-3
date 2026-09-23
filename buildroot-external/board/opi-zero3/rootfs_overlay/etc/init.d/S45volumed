@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# Volume daemon: makes PS + d-pad up/down drive the ALSA mixer.
+#
+# Runs after S11alsa (which does `alsactl restore`, so the stored level is
+# already in place) and after S40bluetoothd, so the pad has a chance to be
+# connected -- though volumed copes either way, it rescans for the pad and
+# reopens on hotplug.
+
+DAEMON="volumed"
+PIDFILE="/var/run/$DAEMON.pid"
+
+start() {
+	[ -x "/usr/bin/$DAEMON" ] || { echo "volumed: missing"; return 1; }
+	printf "Starting %s: " "$DAEMON"
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" --exec "/usr/bin/$DAEMON"
+	status=$?
+	if [ "$status" -eq 0 ]; then echo "OK"; else echo "FAIL"; fi
+	return "$status"
+}
+
+stop() {
+	printf "Stopping %s: " "$DAEMON"
+	[ -f "$PIDFILE" ] && start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
+	# Same lesson as S12launcher: verify it actually died before dropping the
+	# pidfile, or a failed stop leaves an unstoppable process behind.
+	i=0
+	while pidof "$DAEMON" >/dev/null 2>&1; do
+		i=$((i + 1))
+		[ "$i" -gt 10 ] && break
+		[ "$i" -eq 1 ] && killall "$DAEMON" 2>/dev/null
+		[ "$i" -eq 6 ] && killall -9 "$DAEMON" 2>/dev/null
+		sleep 1
+	done
+	if pidof "$DAEMON" >/dev/null 2>&1; then echo "FAIL"; return 1; fi
+	rm -f "$PIDFILE"
+	# Persist whatever level we ended on.
+	alsactl store >/dev/null 2>&1
+	echo "OK"
+}
+
+case "$1" in
+	start)   start;;
+	stop)    stop;;
+	restart|reload) stop; start;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1
+esac
+exit $?

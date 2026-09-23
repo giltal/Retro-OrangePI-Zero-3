@@ -1,0 +1,62 @@
+fuse: Kempston joystick, and accept plain RETRO_DEVICE_JOYPAD
+
+The joystick did nothing in ZX Spectrum games despite fuse.cfg already
+requesting Kempston (input_libretro_device_p1 = 513). The config was
+never the problem.
+
+RetroArch calls retro_set_controller_port_device(0, RETRO_DEVICE_JOYPAD)
+after core init. Plain JOYPAD (value 1) matches none of the Spectrum
+joystick cases in the switch, so it falls through to default:, which
+records input_devices[port] but never assigns joystick_1_output. The
+joystick is then silently dead whatever the user presses, and whatever
+the frontend config asked for.
+
+Two changes:
+  1. port 0 defaults to Kempston rather than Cursor. Cursor maps the
+     stick to keyboard keys; Kempston is what Spectrum software expects.
+  2. plain RETRO_DEVICE_JOYPAD is treated as Kempston, so joystick input
+     survives whatever the frontend sends.
+
+Ported from the LyraZeroW project, which hit and solved this on the same
+fuse commit (69a44421). Its log also notes the override directory is
+case-sensitive: the core reports library_name "fuse", so the config
+must live at config/fuse/fuse.cfg, not config/Fuse/Fuse.cfg.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/src/libretro.c
++++ b/src/libretro.c
+@@ -539,7 +539,9 @@
+    active_cheats = NULL;
+ 
+    // Set default controllers
+-   retro_set_controller_port_device( 0, RETRO_DEVICE_CURSOR_JOYSTICK );
++   /* RetroBPI: Kempston, not Cursor. Kempston is what Spectrum games
++    * overwhelmingly expect; Cursor maps the stick to keyboard keys. */
++   retro_set_controller_port_device( 0, RETRO_DEVICE_KEMPSTON_JOYSTICK );
+    retro_set_controller_port_device( 1, RETRO_DEVICE_KEMPSTON_JOYSTICK );
+    retro_set_controller_port_device( 2, RETRO_DEVICE_SPECTRUM_KEYBOARD );
+ }
+@@ -975,6 +977,22 @@
+ void retro_set_controller_port_device(unsigned port, unsigned device)
+ {
+    log_cb(RETRO_LOG_INFO, "port %u device %08x\n", port, device);
++   /* RetroBPI: treat plain RETRO_DEVICE_JOYPAD as Kempston.
++    *
++    * RetroArch calls this with RETRO_DEVICE_JOYPAD (value 1) after core init,
++    * overriding whatever default was set at startup. Plain JOYPAD matches none
++    * of the Spectrum joystick cases below, so it falls through to default:,
++    * which records input_devices[port] but never sets joystick_1_output -- the
++    * joystick is then silently dead no matter what the user presses.
++    *
++    * Mapping it to Kempston keeps joystick input alive whatever the frontend
++    * sends, and Kempston is the right default for Spectrum software.
++    *
++    * Ported from the LyraZeroW project, which hit and solved this on the same
++    * fuse commit (69a44421). */
++   if (device == RETRO_DEVICE_JOYPAD)
++      device = RETRO_DEVICE_KEMPSTON_JOYSTICK;
++
+    switch (device)
+    {
+       case RETRO_DEVICE_CURSOR_JOYSTICK:

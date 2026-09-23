@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Bring up a network interface that has just appeared, and get it a lease.
+#
+# Called from udev (70-net-hotplug.rules) on SUBSYSTEM=="net", ACTION=="add".
+# Without this, swapping the Ethernet cable or a USB-Ethernet adapter at runtime leaves eth0 up but
+# unconfigured -- nothing re-runs udhcpc -- and the board becomes reachable only
+# over the serial console. That failure mode cost real time during bring-up.
+#
+# BACKGROUNDING ALONE IS NOT ENOUGH, and getting this wrong cost 10.3 s on every
+# boot. udev does not wait merely for a RUN+= program to exit -- it waits for the
+# stdout/stderr pipe it handed that program to reach EOF. A plain "( ... ) &"
+# subshell inherits those descriptors and holds the pipe open for as long as it
+# runs, so "udevadm settle" blocked for the entire carrier-wait loop below and
+# the launcher started 10 s late. Measured: S10udevd 10.55 s, of which settle was
+# 10.33 s, with no kernel activity in the window at all.
+#
+# Redirecting only the inner udhcpc does not fix it; the detached shell itself
+# must give up all three descriptors. setsid additionally puts it in its own
+# session, so a udev rule timeout cannot kill the DHCP client either.
+
+IFACE="$1"
+[ -n "$IFACE" ] || exit 0
+
+# Only handle wired interfaces here. wlan0 needs wpa_supplicant first and is
+# owned by S49wifi; racing it from udev would produce two supplicants.
+case "$IFACE" in
+	eth*|usb*) ;;
+	*) exit 0 ;;
+esac
+
+PIDFILE=/var/run/udhcpc.$IFACE.pid
+
+# Give the adapter a moment to settle; a USB r8152 needs several seconds from
+# enumerate to carrier, and asking for a lease before then just burns a timeout.
+setsid /bin/sh -c '
+	IFACE="$1"
+	PIDFILE="$2"
+	i=0
+	while [ $i -lt 10 ]; do
+		[ "$(cat /sys/class/net/$IFACE/carrier 2>/dev/null)" = "1" ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+
+	ip link set "$IFACE" up 2>/dev/null
+
+	# Replace any stale client for this interface rather than stacking them up.
+	if [ -f "$PIDFILE" ]; then
+		kill "$(cat $PIDFILE)" 2>/dev/null
+		rm -f "$PIDFILE"
+	fi
+
+	/sbin/udhcpc -b -i "$IFACE" -t 5 -T 2 -S -p "$PIDFILE"
+' sh "$IFACE" "$PIDFILE" </dev/null >/dev/null 2>&1 &
+
+exit 0

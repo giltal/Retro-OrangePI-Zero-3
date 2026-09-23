@@ -1,0 +1,11 @@
+# Re-run DHCP when a wired interface appears at runtime.
+#
+# The shipped /etc/network/interfaces brings eth0 up at boot with a backgrounded
+# udhcpc, which is right for boot time but does nothing for a device that shows
+# up later. Unplugging and replugging the USB-Ethernet adapter therefore left the
+# board reachable only over serial.
+#
+# net-hotplug backgrounds its own work and returns immediately, because udev
+# serialises RUN+= and kills slow rules.
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="eth*", RUN+="/usr/sbin/net-hotplug %k"
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="usb*", RUN+="/usr/sbin/net-hotplug %k"

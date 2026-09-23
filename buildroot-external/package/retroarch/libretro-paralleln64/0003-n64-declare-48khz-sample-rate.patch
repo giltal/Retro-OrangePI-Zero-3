@@ -1,0 +1,21 @@
+N64: declare 48 kHz so the frontend does not resample
+
+Pairs with 0002. With the core producing 48000 natively and the codec
+running at 48000, declaring it here means RetroArch performs no rate
+conversion at all.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/libretro/libretro.c
++++ b/libretro/libretro.c
+@@ -884,7 +884,9 @@
+    info->geometry.max_height   = screen_height;
+    info->geometry.aspect_ratio = 4.0 / 3.0;
+    info->timing.fps = (region == SYSTEM_PAL) ? 50.0 : (60.13);                /* TODO: Actual timing  */
+-   info->timing.sample_rate = 44100.0;
++   /* RetroBPI: 48000 to match the codec exactly, so the frontend performs no
++    * rate conversion at all. The core now resamples straight to this rate. */
++   info->timing.sample_rate = 48000.0;
+ }
+ 
+ unsigned retro_get_region (void)

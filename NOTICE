@@ -1,0 +1,39 @@
+RetroOPI_Z3
+Copyright (C) 2026 Gil Tal
+
+Licensed under the GNU General Public License version 2 or later.
+See LICENSE for the full text.
+
+
+SCOPE
+=====
+
+The licence covers the work original to this repository:
+
+    launcher/               the launcher
+    buildroot-external/     Buildroot external tree, package recipes, board files
+    tools/                  on-board helpers
+    scripts/, docs/         tooling and documentation
+
+It does NOT relicense the third-party software this project builds. Buildroot,
+the Linux kernel, U-Boot, RetroArch and every libretro core are fetched from
+their own upstreams at pinned revisions and remain under their own licences.
+
+Patches under buildroot-external/package/ and buildroot-external/board/*/patches/
+are modifications to those upstream works and inherit the licence of the file
+they modify. The kernel patches in buildroot-external/board/opi-zero3/patches/linux/
+are vendored unmodified from the Armbian build framework (GPL-2.0); see the
+README.md in that directory for their provenance.
+
+buildroot-external/package/retroarch/retroarch/retro-assets/ contains RetroArch
+menu assets (fonts, wallpapers, icons) vendored from the RetroArch assets
+repository, under their own licences.
+
+
+GAME CONTENT
+============
+
+No ROMs, BIOS images or other copyrighted game content are distributed here.
+
+The PlayStation core requires a BIOS image (SCPH1001.BIN) which is copyrighted
+Sony code. It is deliberately not included; supply your own.

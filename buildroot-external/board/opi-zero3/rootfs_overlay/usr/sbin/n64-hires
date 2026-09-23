@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Toggle parallel-n64's render resolution: 640x480 ("hires") or 320x240.
+#
+# On the reference (A33, Mali-400) this also overclocked the GPU, because the
+# Mali-400 was geometry-bound and 640x480 only reached ~91% speed. None of that
+# carries over: the Mali-G31 is a different class of GPU, and panfrost does its
+# own devfreq. So this only changes the resolution. Which of the two is the
+# right DEFAULT here is an open measurement -- see DevelopmentLog.md.
+#
+# The launcher's Settings -> "N64 Quality" item calls this, and reads the
+# state back from the .opt file (the single source of truth).
+
+OPT="/root/.config/retroarch/config/ParaLLEl N64/ParaLLEl N64.opt"
+
+case "$1" in
+	on)
+		sed -i 's/^parallel-n64-screensize = .*/parallel-n64-screensize = "640x480"/' "$OPT"
+		sync
+		echo "n64-hires ON : 640x480"
+		;;
+	off)
+		sed -i 's/^parallel-n64-screensize = .*/parallel-n64-screensize = "320x240"/' "$OPT"
+		sync
+		echo "n64-hires OFF: 320x240"
+		;;
+	status|"")
+		echo "  resolution : $(sed -n 's/^parallel-n64-screensize = //p' "$OPT")"
+		for z in /sys/class/thermal/thermal_zone*; do
+			[ -r "$z/temp" ] && echo "  $(cat $z/type 2>/dev/null): $(( $(cat $z/temp) / 1000 )) C"
+		done
+		;;
+	*)
+		echo "usage: n64-hires {on|off|status}"; exit 1
+		;;
+esac
+exit 0

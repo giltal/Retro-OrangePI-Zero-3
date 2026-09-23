@@ -1,0 +1,12 @@
+# Core options for the Atari 800 core.
+#
+# The virtual keyboard is toggled in-game with R (R1), added by
+# 0001-atari800-vkbd-on-R-as-well-as-L3.patch. The stock binding is L3, which is
+# unusable on this device's DualShock 3: clicking the analog sticks emits the
+# L2/R2 trigger codes (BTN_TL2/BTN_TR2), never BTN_THUMBL/BTN_THUMBR, so the
+# core never saw its toggle. L3 still works on pads that report stick clicks
+# properly. See the patch header for the evtest capture.
+#
+# Left disabled so the keyboard appears on demand rather than permanently
+# overlaying the screen.
+atari800_vkbd_enabled = "disabled"

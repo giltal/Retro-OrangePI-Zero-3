@@ -1,0 +1,157 @@
+drm_gfx: use the primary plane; sun4i overlays cannot scale
+
+Two problems, both giving a black screen for every game while the RGUI menu
+displayed correctly.
+
+1. The plane-selection loop sets drm.use_primary as soon as it *encounters* a
+   primary plane, never clears it, and does not break. Iterating planes
+   33 (primary), 37, 41, 45 (overlays) ends with plane_id = 45 while
+   use_primary is still true from plane 33.
+
+   drm_surface_setup() runs BEFORE that loop and sizes the framebuffer from
+   use_primary, so the buffer was allocated at core size (160x144 for Game Boy)
+   and then handed to drmModeSetCrtc(), which cannot scale and requires the fb
+   to cover the entire CRTC:
+
+     [ERROR] [DRM]: failed to set CRTC for primary plane
+     [INFO] [DRM]: primary/CRTC mode: src 160x144 -> 800x480
+
+   The menu escaped this because toggling it re-runs setup with use_primary
+   already true, allocating a full-screen buffer.
+
+2. Preferring an overlay instead is not enough: the Allwinner display engine
+   advertises overlay planes but rejects any SCALED drmModeSetPlane with
+   EINVAL. Measured with modetest on a BPI-M2 Magic:
+
+     -P 37@49:800x480@RG16       -> works
+     -P 37@49:320x240*2.0@RG16   -> failed to enable plane: Invalid argument
+
+   A libretro core almost never matches the panel mode, so the overlay path
+   cannot carry game video here. drmModeSetPlane leaves the plane detached
+   while reporting success - modetest shows "crtc 0, fb 0" for the plane
+   RetroArch claims to be using.
+
+So classify planes properly during the loop instead of clobbering the flag, and
+select the primary plane, which takes a full-screen buffer scaled in software by
+drm_surface_update() - the path the menu already used successfully. Revisit if a
+platform turns up whose overlay planes do scale.
+
+Also frees the drmModePlane on every path; the original leaked it on each
+'continue'.
+
+Tested on a BananaPi M2 Magic (A33) with a Waveshare 5inch DSI LCD (B) at
+800x480, running gambatte (160x144).
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/gfx/drivers/drm_gfx.c
++++ b/gfx/drivers/drm_gfx.c
+@@ -564,6 +564,13 @@
+     *
+     * Look at linux/source/drivers/gpu/drm/drm_plane_helper.c comments for more info.
+     * Also, primary planes can't be scaled: we need overlays for that. */
++   /* The primary plane cannot be scaled and must cover the whole CRTC, so a
++    * core rendering smaller than the mode (160x144 Game Boy on an 800x480
++    * panel, say) can only be displayed through an OVERLAY. Track both and
++    * decide after the loop. */
++   uint32_t overlay_plane_id = 0;
++   uint32_t primary_plane_id = 0;
++
+    for (i = 0; i < plane_resources->count_planes; i++)
+    {
+       plane = drmModeGetPlane(drm.fd, plane_resources->planes[i]);
+@@ -574,29 +581,58 @@
+          continue;
+       }
+ 
+-      /* Skip cursor planes; accept both overlay and primary */
++      /* Skip cursor planes. Classify the rest and pick after the loop. */
+       {
+          uint64_t ptype = drm_plane_type(plane);
++
+          if (ptype == DRM_PLANE_TYPE_CURSOR)
+          {
+             RARCH_LOG ("DRM: plane with ID %d is a cursor plane. Skipping.\n",
+                   plane->plane_id);
++            drmModeFreePlane(plane);
+             continue;
+          }
+-         if (ptype == DRM_PLANE_TYPE_PRIMARY)
+-            drm.use_primary = true;
+-      }
+ 
+-      if (!format_support(plane, surface->pixformat))
+-      {
+-         RARCH_LOG ("DRM: plane with ID %d does not support framebuffer format\n", plane->plane_id);
+-         continue;
++         if (!format_support(plane, surface->pixformat))
++         {
++            RARCH_LOG ("DRM: plane with ID %d does not support framebuffer format\n",
++                  plane->plane_id);
++            drmModeFreePlane(plane);
++            continue;
++         }
++
++         if (ptype == DRM_PLANE_TYPE_OVERLAY)
++         {
++            if (!overlay_plane_id)
++               overlay_plane_id = plane->plane_id;
++         }
++         else if (ptype == DRM_PLANE_TYPE_PRIMARY)
++         {
++            if (!primary_plane_id)
++               primary_plane_id = plane->plane_id;
++         }
+       }
+ 
+-      drm.plane_id = plane->plane_id;
+       drmModeFreePlane(plane);
+    }
+ 
++   /* Prefer the PRIMARY plane. The overlay cannot scale on this hardware
++    * (see drm_get_resources()), and drm_surface_setup() has already sized
++    * the framebuffer to match use_primary -- the two must agree or the
++    * buffer will not suit the path that consumes it. Fall back to an
++    * overlay only if there is no usable primary plane at all. */
++   if (primary_plane_id)
++   {
++      drm.plane_id    = primary_plane_id;
++      drm.use_primary = true;
++   }
++   else if (overlay_plane_id)
++   {
++      drm.plane_id    = overlay_plane_id;
++      drm.use_primary = false;
++      RARCH_LOG ("DRM: no primary plane, using overlay (scaling may fail)\n");
++   }
++
+    if (!drm.plane_id)
+    {
+       RARCH_LOG ("DRM: couldn't find an usable overlay plane for current CRTC and framebuffer pixel formal.\n");
+@@ -872,11 +908,21 @@
+             }
+          }
+          drmModeFreePlaneResources(pr);
+-         if (!has_overlay)
+-         {
+-            drm.use_primary = true;
+-            RARCH_LOG("DRM: no overlay planes found, will use primary plane with CRTC mode\n");
+-         }
++         /* The Allwinner display engine advertises overlay planes but
++          * rejects any SCALED drmModeSetPlane with EINVAL. Measured with
++          * modetest on a BPI-M2 Magic: an unscaled 800x480 overlay works,
++          * while a 320x240 source scaled 2x fails with
++          * "failed to enable plane: Invalid argument".
++          *
++          * A libretro core almost never matches the panel mode, so the
++          * overlay path cannot carry game video on this hardware. The
++          * primary plane takes a full-screen buffer and is scaled in
++          * software by drm_surface_update() -- the path the RGUI menu
++          * already used successfully. Revisit if a platform turns up
++          * whose overlay planes do scale. */
++         (void)has_overlay;
++         drm.use_primary = true;
++         RARCH_LOG("DRM: using primary plane with software scaling\n");
+       }
+    }
+ 

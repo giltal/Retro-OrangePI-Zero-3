@@ -1,0 +1,125 @@
+# parallel-n64 defaults, carried over UNCHANGED from RetroBPI_M2M, where they
+# were tuned for a Mali-400 MP2 (GLES 2.0 only) and a 1.2 GHz Cortex-A7. The
+# Zero3 (Mali-G31, 1.5 GHz A53) is faster on both counts, so these are a safe
+# floor, not a tuning. Re-measure here, starting with screensize.
+#
+# Original notes follow. Every value below is one the core actually offers -- read
+# out of the built .so rather than guessed, since an invalid value is silently
+# ignored and leaves the default in place.
+#
+# These are STARTING POINTS chosen for speed, not measured settings. N64 on this
+# class of hardware is marginal by nature; treat anything here as a first guess
+# to be replaced by what the board actually does.
+
+# ARM dynamic recompiler. The interpreters are far slower; this core does ship
+# a working new_dynarec for ARM.
+parallel-n64-cpucore = "dynamic_recompiler"
+
+# rice, not glide64 -- measured, not assumed. On Mario Kart 64 the ALSA stream
+# broke in 10 of 12 one-second samples with glide64 and 5-6 of 12 with rice, at
+# the same frame rate. rice is the less compatible renderer, so if a title
+# misrenders, glide64 and gln64 are the alternatives.
+#
+# Deliberately not "auto": auto can land on angrylion, a software rasteriser
+# that is hopeless here, and the failure would look like "N64 is slow" rather
+# than "the wrong renderer was picked".
+parallel-n64-gfxplugin = "rice"
+parallel-n64-gfxplugin-accuracy = "low"
+
+# HLE RSP. cxd4 is the accurate LLE interpreter and is much too slow here.
+parallel-n64-rspplugin = "hle"
+
+# Internal render resolution. The panel is 800x480, so rendering at 640x480 and
+# letting the scaler handle it costs less than native and looks the same.
+parallel-n64-screensize = "320x240"
+
+parallel-n64-framerate = "original"
+parallel-n64-audio-buffer-size = "2048"
+
+# Audio lists to the HLE RSP. Measured as no help on Mario Kart 64 (11/12 bad
+# samples with, 10/12 without) but it is the documented fast path and costs
+# nothing, so it stays on for titles that may benefit.
+parallel-n64-send_allist_to_hle_rsp = "enabled"
+
+# NOTE ON N64 AUDIO, so nobody re-runs this investigation:
+#
+# Choppy N64 sound on this board is not an audio-path fault. The emulator
+# thread sits at 94-100% of one core in every configuration tried -- glide64,
+# rice, 320x240, threaded video, framerate=fullspeed -- and the ALSA stream
+# underruns because there is no CPU headroom left to feed it. RetroArch keeps
+# flipping the display at ~60 Hz regardless, which is why the picture looks
+# fine while the sound breaks up.
+#
+# ---------------------------------------------------------------------------
+# 320x240 IS THE FIX FOR THE N64 AUDIO. Do not raise it without re-measuring.
+#
+# An earlier version of this file recorded 320x240 as "measured as NOT helping".
+# That was wrong, and wrong in an instructive way: it had been measured against
+# ALSA xrun counts, taken during 45 seconds of the title screen. Wrong metric,
+# wrong load.
+#
+# The real metric is emulation speed -- audio-seconds produced per wall-second,
+# measured during actual racing (the attract-mode demo works for automation).
+# Measured that way:
+#
+#   rice 640x480 original     avg speed 809/1000   worst 757
+#   rice 320x240 original     avg speed 998/1000   worst 943   <- shipped
+#   glide64 640x480 original  avg speed 803/1000   worst 324
+#   rice 640x480 fullspeed    avg speed 814/1000   worst 769
+#
+# At 640x480 the emulator ran at 87% of real time. The frontend's dynamic rate
+# control then STRETCHES the audio to keep the ALSA buffer full, so the buffer
+# looks perfect (rock steady 96 ms margin, zero underruns, zero discontinuities)
+# while the stretch ratio modulates 0.85-1.10 second to second. That modulation
+# is what was audible as "dirty". Gil identified the cause from experience after
+# several rounds of instrumentation had reported the audio pipeline healthy.
+#
+# 320x240 is the N64's native output resolution, so this is not rendering below
+# the original hardware -- 640x480 was 2x supersampling, an enhancement this SoC
+# cannot afford. The emulator blocks ~12% of the time waiting on the Mali (it
+# sits at 88% CPU, not 100%), i.e. this is GPU-bound, not CPU-bound.
+#
+# Beware any metric that a control loop exists to stabilise. Buffer level under
+# dynamic rate control is the type case: measure what the loop sacrifices
+# (timing fidelity), not what it protects.
+#
+# Also measured as NOT helping: send_allist_to_hle_rsp (either way),
+# audio-buffer-size 2048 vs 4096, video_threaded (worse -- adds a copy when the
+# problem is render throughput), framerate=fullspeed (no change, 814 vs 809).
+# ---------------------------------------------------------------------------
+#
+# Mario Kart 64 is a demanding title. Lighter N64 games may well be fine; that
+# has not been tested, because the only N64 ROMs on the card are two heavy 3D
+# titles.
+
+# ---------------------------------------------------------------------------
+# Analog stick response.
+#
+# The pad is genuinely proportional -- captured from evdev, 123 distinct values
+# across ABS_X over its full 0..255 range, centre at 128. So this is shaping real
+# analog data, not compensating for a digital stick.
+#
+# SENSITIVITY 100, NOT HIGHER. The core maps a full deflection like this:
+#
+#     radius *= 80.0 / ASTICK_MAX * (astick_sensitivity / 100.0)
+#
+# The N64 stick range is +-80 and ASTICK_MAX is 0x8000, so 100 maps a full push
+# to exactly 80. At 120 it produces 96, and nothing clamps it: the outer ~17% of
+# stick travel does nothing but sit at full lock, and full lock arrives early.
+# That reads as edgy and digital. 120 was tried and was worse.
+#
+# DEADZONE 5, DOWN FROM THE 15 DEFAULT. This is the lever for edginess, and it
+# works the opposite way round to intuition:
+#
+#     radius = (radius - deadzone) * (ASTICK_MAX / (ASTICK_MAX - deadzone))
+#
+# The remaining travel is rescaled back to the full range, so a LARGER deadzone
+# compresses the whole range into less stick movement -- a steeper curve, less
+# fine control. 15 spends the first 15% of travel doing nothing and then covers
+# everything in the other 85%. 5 leaves just enough to absorb centre noise while
+# spreading the response across 95% of the throw.
+#
+# If the stick ever drifts at rest, raise the deadzone back toward 10.
+# ---------------------------------------------------------------------------
+parallel-n64-astick-sensitivity = "100"
+parallel-n64-astick-deadzone = "5"

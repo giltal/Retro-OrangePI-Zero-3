@@ -1,0 +1,24 @@
+pcsx_rearmed: link the objects libretro-cdrom.c needs
+
+frontend/libretro-cdrom.c references dir_list_new() and compat_strcasestr()
+but neither object is in OBJS, so the core links with undefined symbols and
+cannot be dlopen'd.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/Makefile
++++ b/Makefile
+@@ -437,6 +437,13 @@
+ endif
+ ifeq "$(HAVE_PHYSICAL_CDROM)" "1"
+ OBJS += frontend/libretro-cdrom.o
++# libretro-cdrom.c calls dir_list_new() and compat_strcasestr(), but neither
++# object is in the list above. The C compiles -- the headers declare them --
++# so the build succeeds and produces a .so with two undefined symbols, which
++# only shows up when the frontend tries to dlopen it and reports the unhelpful
++# "Failed to open libretro core".
++OBJS += deps/libretro-common/lists/dir_list.o
++OBJS += deps/libretro-common/compat/compat_strcasestr.o
+ OBJS += deps/libretro-common/lists/string_list.o
+ OBJS += deps/libretro-common/memmap/memalign.o
+ OBJS += deps/libretro-common/vfs/vfs_implementation_cdrom.o

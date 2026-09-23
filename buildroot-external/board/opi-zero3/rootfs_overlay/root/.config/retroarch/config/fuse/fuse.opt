@@ -1,0 +1,5 @@
+fuse_machine = "Spectrum 48K"
+fuse_hide_border = "disabled"
+fuse_fast_load = "enabled"
+fuse_key_ovrlay_transp = "enabled"
+fuse_key_hold_time = "500"

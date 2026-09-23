@@ -1,0 +1,57 @@
+#!/bin/sh
+#
+# Bluetooth pairing agent.
+#
+# Needed only to CABLE-PAIR a new DualShock 3: the sixaxis plugin asks an agent
+# to authorise the pad before it writes the host address into it, and with no
+# agent registered bluetoothd logs
+#     "Authentication attempt without agent"
+#     agent_auth_cb() Agent replied negatively, removing temporary device
+# and the pairing silently fails. Already-paired pads reconnect without this.
+#
+# bluetoothctl's built-in agent is interactive -- it prints
+# "Authorize service ... (yes/no)" and waits on stdin -- so a plain background
+# invocation is not enough. Feeding it a periodic "yes" answers the prompt when
+# one appears. The stray "Invalid command in menu main: yes" lines it logs in
+# between are harmless.
+#
+# S41 so it starts just after S40bluetoothd.
+
+DAEMON="bluetoothctl"
+PIDFILE="/var/run/bt-agent.pid"
+LOGFILE="/var/log/bt-agent.log"
+
+start() {
+	printf "Starting bluetooth pairing agent: "
+	start-stop-daemon --start --background --make-pidfile --pidfile "$PIDFILE" \
+		--startas /bin/sh -- -c \
+		'{ echo "agent NoInputNoOutput"; echo "default-agent"; \
+		   while true; do echo "yes"; sleep 2; done; } \
+		 | bluetoothctl >> '"$LOGFILE"' 2>&1'
+	status=$?
+	# Trust whatever is already paired. An untrusted device asks this agent
+	# for authorisation on every reconnect, and a prompt that misses the
+	# agent gets answered negatively -- at which point bluetoothd REMOVES the
+	# device and the pairing is gone. That cost three cable re-pairings
+	# before it was identified. Trusted devices never consult the agent.
+	( sleep 5; /usr/sbin/bt-trust-paired ) >/dev/null 2>&1 &
+	if [ "$status" -eq 0 ]; then echo "OK"; else echo "FAIL"; fi
+	return "$status"
+}
+
+stop() {
+	printf "Stopping bluetooth pairing agent: "
+	start-stop-daemon --stop --quiet --pidfile "$PIDFILE"
+	killall bluetoothctl 2>/dev/null
+	rm -f "$PIDFILE"
+	echo "OK"
+}
+
+case "$1" in
+	start)   start;;
+	stop)    stop;;
+	restart|reload) stop; sleep 1; start;;
+	*) echo "Usage: $0 {start|stop|restart}"; exit 1
+esac
+
+exit $?

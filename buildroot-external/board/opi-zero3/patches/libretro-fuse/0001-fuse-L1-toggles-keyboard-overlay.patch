@@ -1,0 +1,31 @@
+fuse: let L1 toggle the keyboard overlay unconditionally
+
+Upstream only checks SELECT, and only when the port device is one of the
+joystick types. If it is not, the on-screen keyboard cannot be reached at
+all -- which matters on a handheld with no keyboard.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/src/compat/ui.c
++++ b/src/compat/ui.c
+@@ -91,6 +91,20 @@
+ 
+    unsigned port;
+    int16_t is_down = 0;
++
++   /*
++    * L1 also toggles the keyboard overlay, unconditionally.
++    *
++    * The Spectrum is a keyboard machine and this device has no keyboard, so
++    * reaching the overlay matters. Upstream only checks SELECT, and only
++    * inside the switch below -- i.e. only when the port has been set to one of
++    * the joystick device types. If the device type is anything else the toggle
++    * never fires and the overlay is unreachable.
++    *
++    * Checking L1 here, before the switch, makes it work whatever the port is
++    * set to, and leaves SELECT free for the game.
++    */
++   is_down |= input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L);
+    
+    for (port = 0; port < MAX_PADS; port++)
+    {

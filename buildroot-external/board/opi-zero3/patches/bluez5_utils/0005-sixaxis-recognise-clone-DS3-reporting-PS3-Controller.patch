@@ -1,0 +1,52 @@
+sixaxis: recognise clone DS3 pads reporting "PS3 Controller"
+
+get_pairing() matches a controller on vid, pid AND name:
+
+	if (name && strcmp(name, devices[i].name))
+		continue;
+
+Many third-party DualShock 3 clones use Sony's 054c:0268 identifiers but
+report the generic HID name "PS3 Controller", which is in neither table
+entry ("Sony PLAYSTATION(R)3 Controller" and "SHANWAN PS3 GamePad").
+
+The failure is completely silent. get_pairing() returns NULL, and
+device_added() bails before its info() call, so bluetoothd logs nothing at
+all -- the plugin appears to load and then ignore the pad. Everything else
+looks correct while debugging: the hidraw node is created, HID_ID and
+HID_NAME are present on the parent, udev broadcasts the add event, and the
+adapter is up and default.
+
+Add an entry for the generic name, alongside the existing SHANWAN clone
+entry which was added for the same reason.
+
+Observed on a BananaPi M2 Magic with a clone DS3:
+  HID_ID=0003:0000054C:00000268
+  HID_NAME=PS3 Controller
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/profiles/input/sixaxis.h
++++ b/profiles/input/sixaxis.h
+@@ -49,6 +49,22 @@
+ 			.type = CABLE_PAIRING_SIXAXIS,
+ 		},
+ 		{
++			/*
++			 * Many third-party DS3 clones report the generic name
++			 * "PS3 Controller" while using Sony's 054c:0268 IDs. The
++			 * match below requires vid, pid AND name to agree, so such
++			 * pads are silently ignored: get_pairing() returns NULL and
++			 * device_added() returns without logging anything, which
++			 * makes it look as though the plugin never ran.
++			 */
++			.name = "PS3 Controller",
++			.source = 0x0002,
++			.vid = 0x054c,
++			.pid = 0x0268,
++			.version = 0x0000,
++			.type = CABLE_PAIRING_SIXAXIS,
++		},
++		{
+ 			.name = "Navigation Controller",
+ 			.source = 0x0002,
+ 			.vid = 0x054c,

@@ -1,0 +1,59 @@
+atari800: accept R as well as L3 for the virtual keyboard
+
+L3 alone is unusable on the DualShock 3 this device ships with.
+Captured with evtest on the running board: clicking the left analog
+stick emits BTN_TL2 (312) and the right stick BTN_TR2 (313) -- the
+L2/R2 trigger codes. BTN_THUMBL (317) and BTN_THUMBR (318) appear in
+the device's advertised KEY bitmask but are never actually emitted,
+so the core could never observe its own toggle. Worse, platform.c
+maps L2 to AKEY_ESCAPE, so pressing the stick sent Escape instead.
+
+R is free in this core: the input descriptors bind L (Option) but not
+R, and platform.c notes R was deliberately left unbound once AKEY_UI
+stopped doing anything. BTN_TR does arrive from this pad.
+
+L3 is retained so the stock binding still works on hardware that
+reports thumb-stick clicks correctly.
+
+Reference: the fuse core binds its keyboard overlay to SELECT and works
+on the same controller, which is what identified this as button-specific
+rather than a broken overlay.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/libretro/platform.c
++++ b/libretro/platform.c
+@@ -692,7 +692,22 @@
+ 					return AKEY_HELP;
+ 			}
+ 
+-			if (mbt[i][RETRO_DEVICE_ID_JOYPAD_L3])
++			/* RetroBPI: accept R as well as L3 for the virtual keyboard.
++			 *
++			 * L3 alone is unusable on the DualShock 3 this device ships with.
++			 * Captured with evtest: clicking the left stick emits BTN_TL2 (312)
++			 * and the right stick BTN_TR2 (313) -- the L2/R2 trigger codes.
++			 * BTN_THUMBL (317) and BTN_THUMBR (318) are advertised in the
++			 * device's KEY bitmask but are never actually emitted, so the core
++			 * could never see its own toggle.
++			 *
++			 * R is free here: the input descriptors bind L (Option) but not R,
++			 * and the comment above notes R was deliberately left unbound when
++			 * AKEY_UI stopped doing anything. BTN_TR does arrive from this pad.
++			 *
++			 * L3 is kept so the binding still works on hardware that reports
++			 * thumb-stick clicks properly. */
++			if (mbt[i][RETRO_DEVICE_ID_JOYPAD_L3] || mbt[i][RETRO_DEVICE_ID_JOYPAD_R])
+ 				if (!SHOWKEYDELAY)
+ 				{
+ 					SHOWKEY = -SHOWKEY;
+--- a/libretro/libretro-core.c
++++ b/libretro/libretro-core.c
+@@ -76,6 +76,7 @@
+    { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2, "Esc" },
+    { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2, "Help" },
+    { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3, "Virtual Keyboard" },
++   { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R, "Virtual Keyboard (alt)" },
+ };
+ 
+ static const struct retro_input_descriptor descriptors_a5200[] =

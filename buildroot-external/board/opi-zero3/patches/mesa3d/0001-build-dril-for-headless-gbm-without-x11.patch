@@ -1,0 +1,47 @@
+build: build dril for headless GBM, not only for GLX/X11
+
+The dril target produces the per-display-driver DRI stubs (sun4i-drm_dri.so,
+rockchip_dri.so and friends). gbm_create_device() needs the stub matching the
+KMS device it is handed, so on a system with GBM but no X11 and no GLX the
+stub is never built and EGL cannot be initialised at all.
+
+This matters specifically for a render-only GPU paired with a display-only KMS
+driver, where every GL surface has to be allocated through kmsro against the
+display node. On a BananaPi M2 Magic (lima + sun4i-drm, no X11):
+
+  [DRM]: Found 1 connectors. Connector 0 connected: yes. Mode 0: (800x480)
+  [KMS]: Couldn't create GBM device.
+  [KMS]: Couldn't find a suitable DRM device.
+  [Video]: Cannot open video driver.. Exiting..
+
+with /usr/lib/dri empty, while Mesa's own dril/meson.build lists
+'sun4i-drm_dri.so' and dril_target.c has DEFINE_LOADER_DRM_ENTRYPOINT(sun4i_drm).
+The support is present; only the build gate excludes it.
+
+The enclosing condition is already "with_gallium and with_gbm", so extending the
+inner test with with_gbm is the right scope: GLX and X11 are sufficient reasons
+to build dril, not necessary ones.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -154,7 +154,17 @@
+   subdir('egl')
+ endif
+ if with_gallium and with_gbm
+-  if with_glx == 'dri' or with_platform_x11 or with_platform_xcb
++  # The dril target is what produces the per-display-driver DRI stubs such as
++  # sun4i-drm_dri.so, and gbm_create_device() needs one for the KMS device it
++  # is given. Gating it on GLX/X11 leaves a headless KMS system with GBM but no
++  # stub, so EGL cannot be brought up on a render-only GPU paired with a
++  # display-only KMS driver (lima + sun4i-drm, panfrost + a KMS-only display,
++  # and so on): gbm_create_device() simply fails.
++  #
++  # This block is already inside "if with_gallium and with_gbm", so building
++  # dril whenever GBM is enabled is the correct scope -- X11 and GLX are
++  # sufficient reasons, not necessary ones.
++  if with_glx == 'dri' or with_platform_x11 or with_platform_xcb or with_gbm
+     subdir('gallium/targets/dril')
+   endif
+ endif

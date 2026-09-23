@@ -1,0 +1,9 @@
+config BR2_PACKAGE_RETROOPI_TOOLS
+	bool "retroopi-tools"
+	help
+	  Small on-target helpers for this board:
+
+	  inject-input -- synthesise key presses through /dev/uinput, so the
+	  launcher and RetroArch can be driven from a shell over SSH. Injected
+	  events travel the same evdev/udev path a real gamepad's do. Requires
+	  CONFIG_INPUT_UINPUT.

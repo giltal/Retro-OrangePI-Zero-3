@@ -1,0 +1,40 @@
+# Line endings matter on this project.
+#
+# The host is Windows, but almost everything here is consumed by Linux: shell
+# scripts run on the board or in WSL, patches are applied by `patch`, and init
+# scripts are parsed by busybox. A CRLF sneaking into any of them produces
+# failures that look like something else entirely -- this project has already
+# lost time to `sed -i 's/\r$//'` being needed everywhere, and to a patch that
+# silently matched nothing because the target file had CRLF.
+#
+# Force LF for everything the Linux side touches, regardless of core.autocrlf.
+
+*.sh        text eol=lf
+*.py        text eol=lf
+*.patch     text eol=lf
+*.cfg       text eol=lf
+*.opt       text eol=lf
+*.conf      text eol=lf
+*.dts       text eol=lf
+*.dtsi      text eol=lf
+*.c         text eol=lf
+*.h         text eol=lf
+*.mk        text eol=lf
+*.in        text eol=lf
+*.md        text eol=lf
+*defconfig* text eol=lf
+Config.in   text eol=lf
+
+# init scripts and other extensionless files under the rootfs overlay
+buildroot-external/board/opi-zero3/rootfs_overlay/** text eol=lf
+
+# Binaries: never touch.
+*.png       binary
+*.ttf       binary
+*.so        binary
+*.img       binary
+*.vfat      binary
+*.raw       binary
+*.tar.gz    binary
+*.bin       binary
+*.dtb       binary

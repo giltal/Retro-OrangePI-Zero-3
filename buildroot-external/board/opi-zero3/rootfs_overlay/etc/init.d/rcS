@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# Start all init scripts in /etc/init.d
+# executing them in numerical order.
+#
+# Records how long each script takes to /run/boottiming, so boot regressions
+# can be attributed without guesswork. Costs two /proc/uptime reads per script.
+#
+echo "start $(cut -d' ' -f1 /proc/uptime)" > /run/boottiming
+for i in /etc/init.d/S??*; do
+
+	# Ignore dangling symlinks (if any).
+	[ ! -f "$i" ] && continue
+
+	__t0=$(cut -d' ' -f1 /proc/uptime)
+	case "$i" in
+		*.sh)
+			# Source shell script for speed.
+			(
+				trap - INT QUIT TSTP
+				set start
+				# shellcheck source=/dev/null
+				. "$i"
+			)
+			;;
+		*)
+			# No sh extension, so fork subprocess.
+			"$i" start
+			;;
+	esac
+	__t1=$(cut -d' ' -f1 /proc/uptime)
+	echo "$(basename $i) $__t0 $__t1" >> /run/boottiming
+done
+echo "end $(cut -d' ' -f1 /proc/uptime)" >> /run/boottiming

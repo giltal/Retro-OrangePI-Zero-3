@@ -1,0 +1,226 @@
+# RetroOPI_Z3 — Orange Pi Zero3 (Allwinner H618, 4x Cortex-A53, Mali-G31 MP2, 2 GB)
+#
+# Port of RetroBPI_M2M (C:\BananaPi_Projects\RetroBPI_M2M). The userspace --
+# launcher, RetroArch, cores, init scripts, DS3 Bluetooth -- is carried over.
+# The board layer (arch, kernel, TF-A, U-Boot) is modelled on Buildroot's own
+# configs/orangepi_zero3_defconfig.
+#
+# Output: HDMI at 1280x720. See RETROOPI_LAUNCHER_SCREEN_W/H below and
+# video_fullscreen_x/y in retroarch.cfg; those three places must agree.
+
+# --- Architecture -------------------------------------------------------
+# AArch64, not the reference's 32-bit ARMv7. The cores that matter have
+# AArch64 dynarecs: pcsx_rearmed (ari64/lightrec), gpSP (arm64 JIT) and
+# parallel-n64 (new_dynarec arm64).
+BR2_aarch64=y
+BR2_cortex_a53=y
+BR2_ARM_FPU_VFPV4=y
+
+# --- Toolchain ----------------------------------------------------------
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_18=y
+
+# --- System -------------------------------------------------------------
+BR2_TARGET_GENERIC_HOSTNAME="retroopi"
+BR2_TARGET_GENERIC_ISSUE="RetroOPI_Z3"
+# The debug UART is UART0 on the board's 3-pin debug header (GND / RX / TX,
+# 3.3 V, 115200 8N1). Mainline names it ttyS0.
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
+# dropbear refuses root login with an empty password. Development credential,
+# same convention as the reference -- change before this ships.
+BR2_TARGET_GENERIC_ROOT_PASSWD="retroopi"
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/rootfs_overlay"
+# Two post-image scripts, run in order: ours builds the FAT32 ROM partition
+# image, then the stock wrapper assembles sdcard.img from genimage.cfg.
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/post-image.sh support/scripts/genimage.sh"
+BR2_ROOTFS_POST_SCRIPT_ARGS="-c $(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/genimage.cfg"
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/patches"
+
+# --- Kernel -------------------------------------------------------------
+# 6.18.53 exactly, because patches/linux/ is Armbian's set rebased onto that
+# release (see patches/linux/README.md). Do not bump one without the other.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.18.53"
+BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG=y
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/linux-retrogaming.config"
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="allwinner/sun50i-h618-orangepi-zero3"
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+
+# --- TF-A (BL31) --------------------------------------------------------
+# Armbian's pinned TF-A for sunxi64. lts-v2.12's BL31 outgrew the 256K that
+# mainline sun50i-h616.dtsi reserves; patches/linux/0045 raises it to 512K.
+BR2_TARGET_ARM_TRUSTED_FIRMWARE=y
+BR2_TARGET_ARM_TRUSTED_FIRMWARE_CUSTOM_VERSION=y
+BR2_TARGET_ARM_TRUSTED_FIRMWARE_CUSTOM_VERSION_VALUE="lts-v2.12.9"
+BR2_TARGET_ARM_TRUSTED_FIRMWARE_PLATFORM="sun50i_h616"
+
+# --- U-Boot -------------------------------------------------------------
+# v2026.07 is what Armbian ships on this board today. The H616 DRAM fixes it
+# needed are upstream as of this release.
+BR2_TARGET_UBOOT=y
+BR2_TARGET_UBOOT_BUILD_SYSTEM_KCONFIG=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION=y
+BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2026.07"
+BR2_TARGET_UBOOT_BOARD_DEFCONFIG="orangepi_zero3"
+BR2_TARGET_UBOOT_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_RETROOPI_PATH)/board/opi-zero3/uboot-fastboot.config"
+BR2_TARGET_UBOOT_NEEDS_DTC=y
+BR2_TARGET_UBOOT_NEEDS_PYLIBFDT=y
+BR2_TARGET_UBOOT_NEEDS_OPENSSL=y
+BR2_TARGET_UBOOT_NEEDS_GNUTLS=y
+BR2_TARGET_UBOOT_NEEDS_ATF_BL31=y
+BR2_TARGET_UBOOT_SPL=y
+BR2_TARGET_UBOOT_SPL_NAME="u-boot-sunxi-with-spl.bin"
+# No crust SCP firmware. Suspend is not a feature of this console.
+BR2_TARGET_UBOOT_CUSTOM_MAKEOPTS="SCP=/dev/null"
+
+# --- Filesystem ---------------------------------------------------------
+# 1 GB rather than the reference's 512M: arm64 defconfig ships a large module
+# tree, and the AArch64 cores are bigger.
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="1024M"
+# BR2_TARGET_ROOTFS_TAR is not set
+
+# --- Bring-up toolkit ---------------------------------------------------
+BR2_PACKAGE_LIBDRM=y
+BR2_PACKAGE_LIBDRM_INSTALL_TESTS=y
+BR2_PACKAGE_EVTEST=y
+BR2_PACKAGE_I2C_TOOLS=y
+BR2_PACKAGE_STRACE=y
+BR2_PACKAGE_USBUTILS=y
+BR2_PACKAGE_DTC=y
+BR2_PACKAGE_DTC_PROGRAMS=y
+BR2_PACKAGE_E2FSPROGS=y
+BR2_PACKAGE_DOSFSTOOLS=y
+# dosfstools installs NOTHING without this sub-option. The reference shipped
+# without fsck.fat for weeks and could not clear a stale FAT dirty flag.
+BR2_PACKAGE_DOSFSTOOLS_FSCK_FAT=y
+
+# --- Mesa/panfrost: GPU acceleration ------------------------------------
+# Mali-G31 is Bifrost, which panfrost drives at GLES 3.1. That is a real step
+# up from the reference's Mali-400/lima (GLES 2.0 only). mupen64plus-next and
+# the hardware PSX renderers become options -- to be measured, not assumed.
+#
+# panfrost is render-only. Mesa renders with it and scans out through sun4i-drm
+# via kmsro. GBM needs a per-display sun4i-drm_dri.so stub for that, which Mesa
+# only builds with GLX/X11 unless patches/mesa3d/0001 is applied. Without it:
+# "[KMS]: Couldn't create GBM device".
+#
+# panfrost REQUIRES LLVM in Mesa 26: part of its shader library is precompiled
+# from OpenCL C (libclc/SPIR-V) at build time. Without MESA3D_LLVM, Kconfig
+# silently drops panfrost, and GBM/EGL/GLES go with it, because they need a
+# driver. The only trace is a missing line in .config. This costs LLVM and
+# clang in the build (~1 h), and there is no way around it for this GPU.
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_LLVM=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST=y
+BR2_PACKAGE_MESA3D_GBM=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+BR2_PACKAGE_MESA3D_OPENGL_ES=y
+
+# --- Launcher -----------------------------------------------------------
+# Pulls in SDL2 / SDL2_ttf / SDL2_image / freetype / libdrm. SDL2 is used only
+# for TTF/PNG surfaces; the launcher does its own KMS.
+BR2_PACKAGE_RETROOPI_LAUNCHER=y
+# HDMI mode the launcher asks the TV for. It is also the size of the launcher's
+# framebuffer, so it must be a mode the TV offers. 1280x720@60 is
+# CEA-mandatory for any HDMI sink, which makes it the safe default. 1920x1080
+# later: change these, and video_fullscreen_x/y in retroarch.cfg.
+BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W=1280
+BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_H=720
+
+# --- RetroArch ----------------------------------------------------------
+BR2_PACKAGE_RETROARCH=y
+BR2_PACKAGE_RETROARCH_RGUI=y
+BR2_PACKAGE_RETROARCH_ASSETS=y
+# BR2_PACKAGE_RETROARCH_NETWORKING is not set
+# BR2_PACKAGE_RETROARCH_HID is not set
+
+# --- libretro cores -----------------------------------------------------
+# The reference's shipped set: 21 cores, every one verified at full speed on a
+# 1.2 GHz Cortex-A7. The A53 at 1.5 GHz is faster per clock and runs
+# AArch64 builds, so this is the known-good baseline. Heavier or
+# GPU-dependent cores come after this boots and is measured.
+#
+# Nintendo
+BR2_PACKAGE_LIBRETRO_FCEUMM=y
+BR2_PACKAGE_LIBRETRO_NESTOPIA=y
+BR2_PACKAGE_LIBRETRO_QUICKNES=y
+BR2_PACKAGE_LIBRETRO_GAMBATTE=y
+BR2_PACKAGE_LIBRETRO_TGBDUAL=y
+BR2_PACKAGE_LIBRETRO_MGBA=y
+BR2_PACKAGE_LIBRETRO_SNES9X2005=y
+BR2_PACKAGE_LIBRETRO_SNES9X2010=y
+# Sega
+BR2_PACKAGE_LIBRETRO_GENESISPLUSGX=y
+# Atari
+BR2_PACKAGE_LIBRETRO_STELLA2023=y
+BR2_PACKAGE_LIBRETRO_PROSYSTEM=y
+BR2_PACKAGE_LIBRETRO_ATARI800=y
+# NEC
+BR2_PACKAGE_LIBRETRO_BEETLEPCEFAST=y
+BR2_PACKAGE_LIBRETRO_BEETLESUPERGRAFX=y
+# Arcade
+BR2_PACKAGE_LIBRETRO_FBALPHA2012=y
+BR2_PACKAGE_LIBRETRO_MAME2003PLUS=y
+# Home computers / DOS
+BR2_PACKAGE_LIBRETRO_FUSE=y
+BR2_PACKAGE_LIBRETRO_PRBOOM=y
+# PlayStation: pcsx_rearmed, NEON/AArch64 dynarec. Needs a BIOS in
+# /opt/roms/_system/bios -- see system_directory in retroarch.cfg.
+BR2_PACKAGE_LIBRETRO_PCSX=y
+# Nintendo 64: parallel-n64, the reference's tuned core. It carries the audio
+# patches 0002/0003 and a measured .opt. mupen64plus-next (GLES3) is now
+# possible on this GPU and is the first thing to evaluate after bring-up.
+BR2_PACKAGE_LIBRETRO_PARALLELN64=y
+# GBA: gpSP's dynarec, not mGBA's interpreter. Measured 3-5x on Cortex-A7.
+BR2_PACKAGE_LIBRETRO_GPSP=y
+#
+# Known broken in the reference tree, kept here as documentation:
+#   PICODRIVE  - submodule git server notaz.gp2x.de unreachable
+#   BLUEMSX    - OpenMsxYMF262.cpp compile errors, not fixable with -fcommon
+# BR2_PACKAGE_LIBRETRO_PICODRIVE is not set
+# BR2_PACKAGE_LIBRETRO_BLUEMSX is not set
+
+# --- Audio --------------------------------------------------------------
+BR2_PACKAGE_ALSA_LIB=y
+BR2_PACKAGE_ALSA_UTILS=y
+# alsa-utils installs nothing without its tool sub-options.
+BR2_PACKAGE_ALSA_UTILS_AMIXER=y
+BR2_PACKAGE_ALSA_UTILS_APLAY=y
+BR2_PACKAGE_ALSA_UTILS_ALSAMIXER=y
+BR2_PACKAGE_ALSA_UTILS_ALSACTL=y
+BR2_PACKAGE_ALSA_UTILS_SPEAKER_TEST=y
+
+# --- Host communication -------------------------------------------------
+# Onboard gigabit Ethernet + SSH. No dongle needed on this board.
+BR2_PACKAGE_DROPBEAR=y
+
+# --- Bluetooth: wireless DualShock 3 ------------------------------------
+# Same stack as the reference. The radio is a USB dongle until the onboard
+# UWE5622 driver is brought in. BlueZ's sixaxis plugin pairs the pad over USB
+# once, then it connects wirelessly.
+BR2_PACKAGE_BLUEZ5_UTILS=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_SIXAXIS=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
+BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
+# Firmware for the common Realtek USB BT dongles (RTL8761B, RTL8821C etc).
+BR2_PACKAGE_LINUX_FIRMWARE=y
+BR2_PACKAGE_LINUX_FIRMWARE_RTL_87XX_BT=y
+BR2_PACKAGE_LINUX_FIRMWARE_RTL_88XX_BT=y
+
+# --- Host tools for image assembly --------------------------------------
+BR2_PACKAGE_HOST_DOSFSTOOLS=y
+BR2_PACKAGE_HOST_GENIMAGE=y
+BR2_PACKAGE_HOST_MTOOLS=y
+BR2_PACKAGE_HOST_UBOOT_TOOLS=y
+BR2_PACKAGE_RETROOPI_TOOLS=y

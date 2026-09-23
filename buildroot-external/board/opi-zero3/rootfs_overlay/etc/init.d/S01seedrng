@@ -1,0 +1,60 @@
+#!/bin/sh
+#
+# Seed the kernel RNG -- credit synchronously, regenerate in the background.
+#
+# Overrides Buildroot's urandom-scripts version, which runs seedrng in the
+# foreground. The kernel CRNG turns out to be the gate the entire boot queues
+# behind on this board: udevd, the Bluetooth agent and dropbear all block until
+# `random: crng init done`. Measured, launcher-on-screen time:
+#
+#   seedrng in foreground (stock) : crng at 3.80 s -> launcher at 10.87 s
+#   seedrng removed entirely      : crng at 5.66 s -> launcher at  9.67 s
+#   seedrng backgrounded          : crng at 3.5 s  -> launcher at  6.2 s
+#
+# Removing it made things WORSE -- it is not overhead, it is what makes the
+# CRNG ready early, and without it udevd, the Bluetooth agent and dropbear all
+# sat waiting instead.
+#
+# `seed-credit` credits the stored seed up front, and now SHIPS. It moves crng
+# init from ~3.5 s to ~2.1 s, reliably. It still does NOT make the UI appear
+# sooner -- that was re-measured after a udev bug worth 10.3 s was fixed,
+# specifically to check whether the earlier verdict survived the change in
+# circumstances. It did: ready 5.62 s with it, 5.48 s without, indistinguishable.
+#
+# It is kept anyway, because it lets the seedrng fsync move off the critical
+# path entirely (S51seedrefresh), and that does help: rcS finishes at ~3.8 s
+# instead of ~5.3 s, so dropbear, Bluetooth and the network come up ~1.5 s
+# earlier. Time-to-UI is I/O-bound -- neither the CRNG nor script order is the
+# gate, and four different orderings all landed at 5.46 s.
+#
+# `stop` stays synchronous: at shutdown we genuinely want a fresh seed on disk
+# before the filesystem goes away, and shutdown latency does not matter.
+
+DAEMON="seedrng"
+SEEDRNG_ARGS=""
+
+# shellcheck source=/dev/null
+[ -r "/etc/default/$DAEMON" ] && . "/etc/default/$DAEMON"
+
+case "$1" in
+	start|restart|reload)
+		printf "Seeding RNG: "
+		if [ -x /usr/bin/seed-credit ]; then
+			/usr/bin/seed-credit >/dev/null 2>&1 && printf "credited, " \
+				|| printf "no seed, "
+		fi
+		# Regeneration moved to S51seedrefresh. seedrng also writes NEXT
+		# boot's seed and fsync()s it to the SD card; even backgrounded,
+		# that fsync lands on top of the following script's startup and
+		# stalled it by ~0.8 s. Instrumented: S01syslogd's own work is
+		# 0.10 s, but 0.83 s elapsed before its start() body ran at all.
+		echo "refresh deferred to S51"
+		;;
+	stop)
+		# shellcheck disable=SC2086
+		seedrng $SEEDRNG_ARGS >/dev/null 2>&1 || true
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac

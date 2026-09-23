@@ -1,0 +1,90 @@
+drm_gfx: open the DRM node that actually has a display
+
+init_drm() opens /dev/dri/card0 unconditionally. That is only correct when the
+display controller happens to be the first DRM device to register.
+
+On SoCs that pair a display engine with a separate render-only GPU, it is not.
+The Allwinner A33 has a Mali-400 driven by lima, which registers a DRM node with
+no CRTCs and no connectors; sun4i-drm registers the display. Probe order between
+them is not fixed, and when lima wins, RetroArch opens the render node and dies:
+
+  DRM: can't set UNIVERSAL PLANES cap.
+  DRM: can't set ATOMIC caps
+  DRM: drmModeGetResources failed
+  DRM: Failed to initialize DRM
+  [ERROR] [Video]: Cannot open video driver.. Exiting..
+
+Scan /dev/dri/card* and use the first node that reports both CRTCs and
+connectors, which is the display by definition. Falls back to failing cleanly if
+no such node exists.
+
+Tested on a BananaPi M2 Magic (A33), where lima takes card0 and sun4i-drm card1.
+
+Signed-off-by: RetroBPI_M2M
+
+--- a/gfx/drivers/drm_gfx.c
++++ b/gfx/drivers/drm_gfx.c
+@@ -21,6 +21,7 @@
+ #include <xf86drmMode.h>
+ #include <libdrm/drm_fourcc.h>
+ #include <fcntl.h>
++#include <unistd.h>
+ #include <sys/mman.h>
+ 
+ #include <compat/strl.h>
+@@ -714,12 +715,54 @@
+    return 0;
+ }
+ 
++/* Open the first DRM node that actually drives a display.
++ *
++ * card0 is not necessarily the display controller. On SoCs with a separate
++ * render-only GPU -- Mali/lima on Allwinner, for example -- the GPU registers
++ * its own DRM node that has no CRTCs and no connectors, and probe order decides
++ * which of the two lands on card0. Opening the render node makes
++ * drmModeGetResources() fail and RetroArch exits with 'Cannot open video
++ * driver'. Scan instead, and take the first node reporting both CRTCs and
++ * connectors.
++ */
++static int drm_open_kms_node(void)
++{
++   unsigned i;
++
++   for (i = 0; i < 16; i++)
++   {
++      char path[32];
++      drmModeRes *res;
++      int fd;
++
++      snprintf(path, sizeof(path), "/dev/dri/card%u", i);
++      fd = open(path, O_RDWR);
++      if (fd < 0)
++         continue;
++
++      res = drmModeGetResources(fd);
++      if (res)
++      {
++         bool usable = (res->count_crtcs > 0) && (res->count_connectors > 0);
++         drmModeFreeResources(res);
++         if (usable)
++         {
++            RARCH_LOG("DRM: using %s\n", path);
++            return fd;
++         }
++      }
++      close(fd);
++   }
++
++   return -1;
++}
++
+ static bool init_drm(void)
+ {
+    uint i;
+    drmModeConnector *connector;
+ 
+-   drm.fd = open("/dev/dri/card0", O_RDWR);
++   drm.fd = drm_open_kms_node();
+ 
+    if (drm.fd < 0)
+    {

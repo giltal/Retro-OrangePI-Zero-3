@@ -1,0 +1,37 @@
+config BR2_PACKAGE_RETROOPI_LAUNCHER
+	bool "retroopi-launcher"
+	depends on BR2_PACKAGE_HAS_UDEV
+	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_SDL2
+	select BR2_PACKAGE_SDL2_TTF
+	select BR2_PACKAGE_SDL2_IMAGE
+	# sdl2_image only builds PNG support if libpng is selected, and the
+	# launcher hard-fails on IMG_Init(IMG_INIT_PNG).
+	select BR2_PACKAGE_LIBPNG
+	select BR2_PACKAGE_FREETYPE
+	help
+	  Retro gaming launcher: DRM/KMS framebuffer UI with system browser,
+	  ROM list, favourites, recents, themes, search keyboard and
+	  save-state slot picker. Launches RetroArch and re-initialises on exit.
+
+	  Ported from RetroBPI_M2M, which ported it from the LyraZeroW
+	  SuperRetroPack project.
+
+if BR2_PACKAGE_RETROOPI_LAUNCHER
+
+config BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W
+	int "output width"
+	default 1280
+	help
+	  Width of the HDMI mode the launcher selects, and of its
+	  framebuffer. The launcher picks the connector mode matching
+	  SCREEN_W x SCREEN_H, so this must be a mode the display offers.
+	  1280 for 720p, 1920 for 1080p.
+
+config BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_H
+	int "output height"
+	default 720
+	help
+	  Height of the HDMI mode the launcher selects. 720 or 1080.
+
+endif

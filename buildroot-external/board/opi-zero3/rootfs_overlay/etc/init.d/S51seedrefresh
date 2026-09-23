@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# Regenerate next boot's RNG seed, off the critical path.
+#
+# S01seedrng credits the stored seed synchronously via seed-credit, which is a
+# single ioctl. The expensive half -- generating a new seed and fsync()ing it to
+# a slow SD card -- happens here instead, after the UI is already up.
+#
+# Why this matters: even backgrounded from S01, that fsync stalled the NEXT init
+# script's startup by ~0.8 s. Instrumenting S01syslogd showed its own work was
+# 0.10 s while 0.83 s elapsed before start()'s first line executed -- the shell
+# could not get going while the card was busy. Moving the write here removed
+# that, and rcS now finishes at ~3.8 s instead of ~5.3 s.
+#
+# `stop` stays synchronous: at shutdown we genuinely want a fresh seed on disk
+# before the filesystem goes away, and shutdown latency does not matter.
+case "$1" in
+	start)
+		# Detached, and giving up stdio -- same reason as net-hotplug: anything
+		# holding the parent's descriptors keeps the caller waiting.
+		setsid /bin/sh -c 'seedrng' </dev/null >/dev/null 2>&1 &
+		;;
+	stop)
+		seedrng >/dev/null 2>&1 || true
+		;;
+esac
+exit 0

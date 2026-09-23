@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Mark every bonded device trusted.
+#
+# WHY THIS EXISTS. The DS3 pairing was lost three times. It was not the
+# filesystem and not the power path: a marker file and a fake bond directory
+# planted alongside the real one both survived a power cycle intact, on a boot
+# with a clean ext4 shutdown, while the real bond vanished. Something was
+# removing that device specifically.
+#
+# The mechanism is the one S41btagent already documents:
+#     agent_auth_cb() Agent replied negatively, removing temporary device
+# and the reason it applies here is a DS3 quirk worth knowing:
+#
+#     Paired: no      Trusted: no      Connected: yes
+#
+# BlueZ never marks a sixaxis cable-paired DS3 as "Paired". The link key is
+# written into /var/lib/bluetooth/<adapter>/<mac>/info by the sixaxis plugin, but
+# as far as bluez is concerned the device is merely CONNECTED and untrusted --
+# i.e. TEMPORARY. A temporary device is asked to authorise every service
+# connection, and our agent is a bluetoothctl loop echoing "yes" every 2 seconds,
+# so a prompt landing between echoes goes unanswered, bluetoothd reads that as a
+# refusal, and deletes the device with its link key.
+#
+# THIS IS ALSO WHY THE OBVIOUS IMPLEMENTATION DOES NOTHING. A first version
+# iterated `bluetoothctl paired-devices`, which for this pad returns an empty
+# list -- so the script ran, reported success, and trusted nothing. Enumerate the
+# bond directories on disk instead: those exist regardless of what bluez thinks
+# "paired" means.
+#
+# Idempotent: trusting an already-trusted device is a no-op.
+
+for adapter in /var/lib/bluetooth/*; do
+	[ -d "$adapter" ] || continue
+	for dev in "$adapter"/*; do
+		[ -f "$dev/info" ] || continue
+		mac=$(basename "$dev")
+		# only real addresses, not 'cache' or 'settings'
+		case "$mac" in
+			[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:*) ;;
+			*) continue ;;
+		esac
+		grep -qi '^Trusted=true' "$dev/info" && continue
+		printf 'trust %s\nquit\n' "$mac" | bluetoothctl >/dev/null 2>&1
+	done
+done
+exit 0

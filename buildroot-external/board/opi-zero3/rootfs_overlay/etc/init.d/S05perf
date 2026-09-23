@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Pin the CPU frequency governor to performance.
+#
+# Carried over from the reference's S05powercap. That script mostly dealt with
+# the A33's AXP223, which capped the micro-USB input at 900 mA and reset the
+# board under load. The Zero3 is fed 5 V over USB-C straight into an AXP313a,
+# with no such input limit, so that part is gone. What remains is the governor
+# finding, which is about the scheduler, not the PMIC:
+#
+#   schedutil reacts to load AFTER it appears, which is the wrong behaviour
+#   underneath a real-time audio thread. It was measured dipping mid-game, and
+#   each dip costs audio buffers. Mario Kart 64, 15 s, three rounds each:
+#       schedutil    xruns 10 / 9 / 9
+#       performance  xruns  6 / 6 / 6
+#
+# The H618 runs 480 MHz..1.5 GHz depending on the board's speed bin (read from
+# the SID by sun50i-cpufreq-nvmem). Watch the temperature on a passively
+# cooled board: /sys/class/thermal/thermal_zone*/temp. The H618's thermal
+# zones and cooling maps are in mainline, so it throttles rather than cooks.
+#
+# S05 so it is in place before udev coldplug (S10), the biggest load spike of
+# the boot.
+
+case "$1" in
+	start|restart|reload)
+		printf "CPU: governor -> "
+		for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+			[ -w "$g" ] && echo performance > "$g" 2>/dev/null
+		done
+		cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "no cpufreq"
+		;;
+	stop)
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+esac
+exit 0

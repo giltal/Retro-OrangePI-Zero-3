@@ -1,0 +1,27 @@
+From: LyraZeroW RetroGaming <retrogaming@local>
+Date: Thu, 29 May 2025 00:00:00 +0000
+Subject: [PATCH] Fix plain_drm standalone build without KMS
+
+plain_drm video driver uses symbols from drm_common.c (g_drm_mode,
+drm_get_refresh_rate) but drm_common.o is only compiled when
+HAVE_AND_WILL_USE_DRM=1, which is only set by HAVE_KMS or HAVE_EXYNOS.
+
+This adds HAVE_AND_WILL_USE_DRM=1 to the HAVE_PLAIN_DRM block so
+plain_drm can be used standalone on systems without GBM/EGL (needed
+for GPU-less SoCs like RK3506B).
+
+---
+ Makefile.common | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Makefile.common b/Makefile.common
+--- a/Makefile.common
++++ b/Makefile.common
+@@ -1461,6 +1461,7 @@ endif
+ 
+ ifeq ($(HAVE_PLAIN_DRM), 1)
+    OBJ += gfx/drivers/drm_gfx.o
++   HAVE_AND_WILL_USE_DRM = 1
+    ifneq ($(HAVE_LAKKA), 1)
+       INCLUDE_DIRS += -I/usr/include/libdrm
+    endif

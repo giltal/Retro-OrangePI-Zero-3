@@ -1,0 +1,24 @@
+# RetroOPI_Z3 network configuration.
+#
+# Shipped from the rootfs overlay rather than relying on BR2_SYSTEM_DHCP. That
+# option only generates this file when the skeleton package builds, and
+# Buildroot's target/ tree is incremental, so on a rebuild the old
+# loopback-only file survives and eth0 never appears. The overlay is copied at
+# target-finalize every time, so it always wins. (Reference lesson.)
+
+auto lo
+iface lo inet loopback
+
+# Onboard gigabit Ethernet: the dev iteration link (ssh/scp from the
+# workstation). On the reference this was a USB dongle; the Zero3 has it on board.
+#
+# udhcpc -b backgrounds itself rather than blocking: init continues at once and
+# the lease arrives when carrier does. A foreground DHCP with no cable cost
+# the reference seconds of every boot. S40network also backgrounds `ifup -a`.
+# Replugging the cable at runtime is handled by 70-net-hotplug.rules.
+auto eth0
+iface eth0 inet manual
+	up ip link set $IFACE up
+	up /sbin/udhcpc -b -i $IFACE -t 3 -T 1 -S -p /var/run/udhcpc.$IFACE.pid
+	down /sbin/udhcpc -i $IFACE -p /var/run/udhcpc.$IFACE.pid -x || true
+	down ip link set $IFACE down

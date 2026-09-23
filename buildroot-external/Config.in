@@ -1,0 +1,10 @@
+#
+# RetroOPI_Z3 BR2_EXTERNAL package definitions.
+#
+# The retroarch tree (retroarch + ~60 libretro cores) comes from RetroBPI_M2M,
+# which took it from the Luckfox Lyra SDK's Buildroot fork. Upstream Buildroot
+# has no retroarch or libretro packages at all.
+#
+source "$BR2_EXTERNAL_RETROOPI_PATH/package/retroarch/Config.in"
+source "$BR2_EXTERNAL_RETROOPI_PATH/package/retroopi-launcher/Config.in"
+source "$BR2_EXTERNAL_RETROOPI_PATH/package/retroopi-tools/Config.in"
