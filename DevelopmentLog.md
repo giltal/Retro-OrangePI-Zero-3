@@ -333,6 +333,10 @@ ceiling. Next, measured the reference's way (vblank-counted fps, the audio-secon
 ratio, under gameplay rather than attract mode): 640x480 via Settings → N64 Quality, and
 mupen64plus-next (GLES3) as a candidate.
 
+**N64 at 640x480:** the user switched Settings → N64 Quality to 640x480 and reports N64 smooth
+(by eye). On the reference this ran at ~91% speed on the geometry-bound Mali-400. It is now the
+shipped default in `ParaLLEl N64.opt`, and the toggle can still switch back to 320x240.
+
 ### 1080p
 
 `SCREEN_W/H` → 1920×1080 in the defconfig and `video_fullscreen_x/y` → 1920/1080 in retroarch.cfg.

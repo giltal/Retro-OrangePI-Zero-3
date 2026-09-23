@@ -1,7 +1,8 @@
 # parallel-n64 defaults, carried over UNCHANGED from RetroBPI_M2M, where they
 # were tuned for a Mali-400 MP2 (GLES 2.0 only) and a 1.2 GHz Cortex-A7. The
 # Zero3 (Mali-G31, 1.5 GHz A53) is faster on both counts, so these are a safe
-# floor, not a tuning. Re-measure here, starting with screensize.
+# floor, not a tuning. Screensize has since been raised (below); the rest is
+# still the reference's.
 #
 # Original notes follow. Every value below is one the core actually offers -- read
 # out of the built .so rather than guessed, since an invalid value is silently
@@ -29,9 +30,14 @@ parallel-n64-gfxplugin-accuracy = "low"
 # HLE RSP. cxd4 is the accurate LLE interpreter and is much too slow here.
 parallel-n64-rspplugin = "hle"
 
-# Internal render resolution. The panel is 800x480, so rendering at 640x480 and
-# letting the scaler handle it costs less than native and looks the same.
-parallel-n64-screensize = "320x240"
+# Internal render resolution: 640x480 on the Zero3.
+#
+# On the reference board (Mali-400) this had to be 320x240: 640x480 only
+# reached ~91% speed there, because that GPU was geometry-bound. The Mali-G31
+# here has no such limit. The user played N64 at 640x480 (via Settings ->
+# N64 Quality) and reports it smooth, 2026-09-23 (by eye, not yet measured).
+# The Settings toggle still switches back to 320x240 if a title struggles.
+parallel-n64-screensize = "640x480"
 
 parallel-n64-framerate = "original"
 parallel-n64-audio-buffer-size = "2048"
