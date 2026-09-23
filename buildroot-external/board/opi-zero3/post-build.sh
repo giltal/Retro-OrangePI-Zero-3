@@ -27,6 +27,19 @@ fail() {
 # Renamed 2026-09-23: S35alsa -> S11alsa (must run before the launcher).
 rm -f "$TARGET_DIR/etc/init.d/S35alsa"
 
+# --- Bring-up: a login prompt on the HDMI console -----------------------
+# Buildroot's inittab only runs a getty on the serial port. If the launcher
+# fails to start on a board with no serial adapter attached, the TV should
+# at least show a login prompt, which proves the kernel, fbcon and userspace are
+# all up. The launcher takes DRM master while it runs, so this is invisible
+# in normal use. Appended here because the overlay would have to replace the
+# whole generated inittab.
+# (busybox inittab has no inline comments -- anything after the command is
+# passed to it as arguments -- so the comment goes on its own line.)
+sed -i '/^tty1::/d; /^# RetroOPI: HDMI console/d' "$TARGET_DIR/etc/inittab"
+printf '# RetroOPI: HDMI console (added by post-build.sh)\ntty1::respawn:/sbin/getty 38400 tty1\n' \
+	>> "$TARGET_DIR/etc/inittab"
+
 # --- Guards ---------------------------------------------------------------
 # Exactly one launcher init script.
 n=$(ls "$TARGET_DIR"/etc/init.d/S??launcher 2>/dev/null | wc -l)
@@ -56,6 +69,23 @@ ext="$TARGET_DIR/boot/extlinux/extlinux.conf"
 for f in $(sed -n 's/^[[:space:]]*\(kernel\|fdt\)[[:space:]]\+//p' "$ext"); do
 	[ -e "$TARGET_DIR$f" ] || fail "extlinux.conf references $f, which is not in target/"
 done
+
+# Every line of the kernel config fragment must survive into the kernel's
+# .config. Kconfig overrides a request it cannot satisfy WITHOUT any error:
+# build #1 asked for SND=y and got =m throughout, because arm64 defconfig has
+# SOUND=m, and BT=y came out =m because of RFKILL=m.
+frag="$BR2_EXTERNAL_RETROOPI_PATH/board/opi-zero3/linux-retrogaming.config"
+kcfg=$(ls -d "$BUILD_DIR"/linux-[0-9]*/.config 2>/dev/null | head -1)
+if [ -f "$frag" ] && [ -f "$kcfg" ]; then
+	bad=0
+	for l in $(grep -E '^CONFIG_[A-Z0-9_]+=' "$frag"); do
+		grep -qxF "$l" "$kcfg" || {
+			echo "  wanted $l, got: $(grep "^${l%%=*}=" "$kcfg" || echo '<unset>')" >&2
+			bad=1
+		}
+	done
+	[ "$bad" -eq 0 ] || fail "kernel config fragment not honoured (see above)"
+fi
 
 # No diagnostic instrumentation may reach an image. Restoring a core's SOURCE
 # does not rebuild the binary, and target/ is incremental, so an instrumented

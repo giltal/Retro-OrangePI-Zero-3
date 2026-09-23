@@ -3018,8 +3018,9 @@ int main(int argc, char *argv[])
     struct timespec ts_start, ts_ready;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
 
-    printf("=== RetroBPI Launcher ===\n");
-    printf("Platform: Banana Pi BPI-M2 Magic (Allwinner A33)\n");
+    printf("=== RetroOPI Launcher ===\n");
+    printf("Platform: Orange Pi Zero3 (Allwinner H618), %dx%d\n",
+           SCREEN_WIDTH, SCREEN_HEIGHT);
 
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);

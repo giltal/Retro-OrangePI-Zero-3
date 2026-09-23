@@ -132,4 +132,152 @@ EGL off it silently tries desktop GL, and fails on `GL/gl.h`. Not reachable with
 
 ### Build #1
 
-Started 08:37. Status: *in progress* (see below).
+Started 08:37. **Failed after 103 min in target clang** (`clangSema`):
+`fatal error: Killed signal terminated program cc1plus`. dmesg confirms the OOM killer.
+`build.sh` ran a top-level `make -j20`, so Buildroot built several packages at once, each with
+about 20 jobs. The core-audit test builds were also running at the time. WSL has 15 GB.
+
+Fix: `build.sh` now runs one package at a time with `BR2_JLEVEL` jobs inside it (default
+nproc, override with `JLEVEL=`). Resumed with clang at `JLEVEL=10`, then the rest at full width.
+Upside: no core had been built yet, so the audit's `.mk` fixes apply without any dirclean.
+
+Resume: clang finished in 2 min at JLEVEL=10. Next failure, 17 min later, was **U-Boot 2026.07
+host tools**. `mkeficapsule` now calls `gnutls_pkcs11_*`, and Buildroot's host-gnutls has no
+p11-kit, so the link fails. EFI capsule updates are irrelevant to an SD-booted console:
+`# CONFIG_TOOLS_MKEFICAPSULE is not set` in `uboot-fastboot.config`, then `uboot-dirclean`
+so the fragment is re-merged. The resume script verifies the option is actually off in U-Boot's
+`.config` before continuing.
+
+The full build then **succeeded** (11:04, sdcard.img 3.2 GB). Before calling it done I
+verified the artifact, not just the exit code:
+- all 21 cores are AArch64. The launcher, volumed and retroarch are aarch64. RetroArch links
+  libgbm/libEGL/libGLESv2
+- Mesa installed `panfrost_dri.so` **and** `sun4i-drm_dri.so`, so the kmsro path is complete
+- DTB: `display-engine`, DE33 `bus@1000000`, `tcon-top`, `tcon-tv` (`lcd-controller@6515000`),
+  `hdmi`, `hdmi-phy` and `gpu` are all enabled. (The disabled `lcd-controller@6511000` is the LCD
+  TCON, which is unused.)
+- post-build guards passed. The MBR has p1 ext4 1 GiB and p2 FAT32 2 GiB.
+
+**But the kernel config was not what the fragment asked for.** Comparing every fragment line
+with the kernel's `.config` found 9 mismatches. All of ALSA came out `=m` because arm64
+defconfig sets the parent `CONFIG_SOUND=m`, and `BT=m` because of `RFKILL=m`. Kconfig caps
+children at their parent's value and says nothing. Modules would probably have worked via udev,
+but the image did not match its own documentation. Fixed with `CONFIG_SOUND=y` and
+`CONFIG_RFKILL=y`, and **post-build.sh now fails the build** when any fragment line does not
+survive into the kernel `.config`. That makes this the third silent-Kconfig catch today
+(panfrost, sound, BT), which is the reason for a guard rather than a note. `linux-dirclean`,
+then rebuild.
+
+**Build #1 final: 11:22, `sdcard.img` md5 `63a72d5fbcc92a907103997833ddeb13`** (3.2 GB, copied to
+`firmware/`, md5 identical). Zero fragment mismatches. `SND`, `SND_SOC_SUNXI_AHUB`,
+`DRM_DW_HDMI_I2S_AUDIO`, `BT` and `RFKILL` are all `=y`. The new guard was tested against a
+deliberately wrong fragment line, and it fails the build as intended.
+
+Total wall time ~2 h 45 min, including the OOM and the U-Boot detour.
+
+### First boot of build #1: black HDMI, not on the network
+
+The user reports the board "booting" (power on), with **nothing on HDMI and no DHCP lease**. A
+sweep of 10.100.102.0/24 found no `02:`-prefixed MAC (the address U-Boot derives from the SID) and
+no dropbear. The one SSH host, .51, is OpenSSH/Debian, the user's Pi Zero 2. No network rules out
+"just a display problem". The board never reached userspace, or never got the link up.
+
+The boot chain was checked offline and is sound: `eGON.BT0` at 8 KB and byte-identical to the build,
+TF-A BL31 embedded, U-Boot with the Zero3 LPDDR4 DRAM settings, bootstd/extlinux/ext4, and `/boot`
+holding Image + DTB + a matching extlinux.conf.
+
+**Self-inflicted blind spot:** the image booted with `quiet loglevel=4`, and U-Boot has no HDMI
+on the H616. So even a kernel that reached fbcon would show a black screen. Rebuilt as a
+**bring-up image**: `earlycon console=tty1 console=ttyS0,115200 loglevel=7`, plus a `tty1` getty
+appended to inittab by post-build.sh. (BusyBox inittab has no inline comments; the first version
+put one after the command, which would have been passed to getty as arguments. Caught before
+flashing.) md5 `6a813d5ddabe4028f2c6535c5baeb3a1`.
+
+Waiting on: serial output, LED behaviour, and whether the TV says "no signal" or shows black.
+
+**Serial (COM8) settled it: the SPL never gets past DRAM init.** Looping forever:
+
+    U-Boot SPL 2026.07 (Sep 23 2026 - 10:43:21 +0300)
+    DRAM:This DRAM setup is currently not supported.
+    resetting ...
+
+That panic is at the end of `mctl_auto_detect_rank_width()` in the new `dram_dw_helpers.c`
+(Jernej Škrabec, 2025). It tries 32/16-bit × rank 2/1, and `mctl_core_init()` fails for all four.
+So DRAM **training** fails outright; this is not a size-detection problem. Our U-Boot `.config` DRAM
+values are identical to upstream `orangepi_zero3_defconfig` (LPDDR4, 792 MHz, TPR6 0x44000000,
+TPR11 0x24242624, TPR12 0x0f0f100f). Armbian carries no Zero3 DRAM patches on v2026.07. The
+Zero 2W (same SoC and RAM family) uses TPR6 0x48808080, TPR11 0x26262524, TPR12 0x100f100f.
+
+> **RETRACTED: wrong board.** The board on the bench was an **Orange Pi Zero2** (H616; it looks
+> almost identical), not the Zero3. So the DRAM failure above says nothing about the Zero3 image,
+> and neither do the "black HDMI / no network" results before it. With the actual Zero3, build #1
+> (the verbose-console image) **booted fully**: launcher on HDMI, DS3 working, on the network at
+> 10.100.102.85 (MAC 02:00:87:ff:1a:4a, dropbear). The A/B bootloader images below are therefore
+> moot and can be deleted.
+>
+> Lesson: when a board shows no sign of life, confirm **which board** is connected before
+> debugging the image. The serial banner told us the SoC failed DRAM training, which should have
+> prompted "is this even a Zero3?". The H616 and H618 SPLs are identical at that stage.
+
+Two bootloader-only test images, built outside Buildroot in `~/opi/ubtest` with the same BL31
+and dd'd over build #1's image at 8 KiB. The partitions are untouched, as checked with sfdisk:
+- `sdcard-A-v2025.04.img`: U-Boot v2025.04, stock zero3 config. That is Armbian's long-time Zero3
+  pin, from before the DRAM-helper rework. **If A boots, it's a v2026.x regression.**
+- `sdcard-B-v2026.07-z2wtpr.img`: v2026.07 with the Zero 2W TPR6/11/12. **If only B boots, this
+  board's LPDDR4 wants different timings.**
+
+### Zero3, first real boot
+
+The launcher is up on HDMI and the PS3 pad works. **Launching a game returns straight to the
+launcher.** Board at 10.100.102.85. The dev SSH key `~/.ssh/retroopi_ed25519` was installed by the
+user (I don't type the root password myself). `board.sh status`: HDMI connected, ALSA card 0 =
+"H616 Audio Codec", card 1 = "HDMI". Thermals ~50 °C idle. `performance` governor at 1416 MHz.
+rcS done at 7.2 s.
+
+RetroArch log:
+
+    [WARN] [KMS]: Couldn't create GBM device.
+    [ERROR] [KMS]: Couldn't find a suitable DRM device.
+    [ERROR] [Video]: Cannot open video driver.. Exiting..
+
+It looked like the reference's GBM/dril problem, but it is not: `sun4i-drm_dri.so`,
+`panfrost_dri.so` and `/usr/lib/gbm/dri_gbm.so` are all present. The real cause is that
+**there is no GPU at all**. `/dev/dri` has only `card0` (sun4i-drm), no render node, and dmesg shows
+
+    panfrost 1800000.gpu: deferred probe timeout, ignoring dependency
+    panfrost 1800000.gpu: probe with driver panfrost failed with error -110
+
+The gpu's device-link suppliers: the PMIC (i2c 0-0036) and the CCU are `available`, and
+**`7010250.power-controller` is `dormant`**. That's `allwinner,sun50i-h616-prcm-ppu`, driven by
+`CONFIG_SUN50I_H6_PRCM_PPU`. Its Kconfig help reads "required to enable the Mali GPU in the H616
+SoC". arm64 defconfig has only `SUN20I_PPU` (the D1 one), which is `default ARCH_SUNXI`; the H6/H616
+one has no default. Added `CONFIG_SUN50I_H6_PRCM_PPU=y` to the fragment.
+
+Also found: the launcher's startup banner still said "RetroBPI / Banana Pi BPI-M2 Magic". The
+session-1 Python replacement for it had no match-count assertion, and its `\n` escaping didn't
+match, so it silently did nothing. Fixed with a literal edit. (The same backslash trap as before, and
+the second time a replacement without an assertion has hidden a miss.)
+
+`board.sh kernel` now also pushes `/lib/modules/<ver>` (wholesale, keeping `.prev`), so kernel
+fixes can be deployed without reflashing.
+
+Deployed with `board.sh kernel` (board and host Image md5 match, `9bef92eb…`) and `board.sh push
+/usr/bin/retroopi_launcher`, then `reboot` over SSH. **The board did not come back on the network**
+(>2 min, no ping). COM8 was silent too, apparently still wired to the Zero2 from earlier. The user
+power-cycled it.
+
+### Result: games run
+
+After the power cycle, reported by the user: **NES games run, the DS3 works, search works, and
+HDMI sound works.** So the whole chain works on real hardware: launcher (720p, UI_SCALE) →
+RetroArch `gl` over KMS/GBM on panfrost → HDMI audio via the AHUB + softvol `default`.
+
+Open items from this session:
+- **The SSH `reboot` did not return by itself.** It's unknown whether it hung in shutdown (S12launcher
+  stop, umount) or in the next boot. Needs the serial console on the Zero3 to see.
+- **After the power cycle the board was not on the network** (no DHCP / no `02:00:87:ff:1a:4a` in
+  ARP), while the launcher, games and sound all worked. Check the cable first, then treat it as a bug:
+  S40network backgrounds `ifup`, and the hot-plug rule should catch a late link.
+- Not yet verified on the board: the renderer string (`Mali-G31 (Panfrost)`), panfrost devfreq, and
+  the S11alsa card choice (card 1 "HDMI" expected).
+- The A/B DRAM test images in `firmware/` (from the Zero2 detour) can be deleted.

@@ -91,6 +91,14 @@ kernel)
 	rcp "$I/Image" "root@$BOARD:/boot/Image.new"
 	rcp "$I/$DTB" "root@$BOARD:/boot/$DTB.new"
 	rcp "$R/boot/extlinux/extlinux.conf" "root@$BOARD:/boot/extlinux/extlinux.conf.new"
+	# Modules must match the kernel they were built with: a config change can
+	# add, remove or alter modules. Replace the tree wholesale.
+	KV=$(ls "$T/lib/modules" | head -1)
+	echo "modules: /lib/modules/$KV"
+	tar -C "$T/lib/modules" -cf - "$KV" | rsh "set -e; rm -rf /lib/modules/$KV.new; mkdir -p /lib/modules/$KV.new
+		tar -C /lib/modules/$KV.new -xf -
+		rm -rf /lib/modules/$KV.prev; [ -d /lib/modules/$KV ] && mv /lib/modules/$KV /lib/modules/$KV.prev
+		mv /lib/modules/$KV.new/$KV /lib/modules/$KV; rmdir /lib/modules/$KV.new"
 	rsh "set -e; cd /boot
 		sed -i 's/\r\$//' extlinux/extlinux.conf.new
 		grep -q '^ *kernel /boot/Image' extlinux/extlinux.conf.new

@@ -35,9 +35,18 @@ if [ ! -f "$OUT/.config" ] || [ "${1:-}" = "defconfig" ]; then
 	[ "${1:-}" = "defconfig" ] && exit 0
 fi
 
-echo "build.sh: $(date '+%F %T') make ${*:-all} (log: $LOG)"
+# Parallelism: BR2_JLEVEL jobs INSIDE each package, one package at a time.
+#
+# Build #1 used a top-level `make -j$(nproc)` instead, which lets Buildroot
+# build several packages concurrently, each with its own nproc jobs. On clang
+# that meant dozens of cc1plus processes at 0.5-2 GB each, and the OOM killer
+# took one mid-build (WSL has 15 GB). Lower JLEVEL further if it recurs:
+#   JLEVEL=8 bash scripts/build.sh clang
+JLEVEL=${JLEVEL:-$(nproc)}
+
+echo "build.sh: $(date '+%F %T') make ${*:-all} BR2_JLEVEL=$JLEVEL (log: $LOG)"
 start=$(date +%s)
-if make O="$OUT" -j"$(nproc)" "$@" > "$LOG" 2>&1; then
+if make O="$OUT" BR2_JLEVEL="$JLEVEL" "$@" > "$LOG" 2>&1; then
 	echo "build.sh: OK after $(( ($(date +%s) - start) / 60 )) min"
 else
 	echo "build.sh: FAILED after $(( ($(date +%s) - start) / 60 )) min -- tail of $LOG:"
