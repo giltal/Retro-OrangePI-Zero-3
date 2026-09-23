@@ -10,8 +10,10 @@ the GPU through Mesa panfrost, with the reference project's 21 emulator cores.
 A port of [RetroBPI_M2M](https://github.com/giltal) (Banana Pi M2 Magic, DSI
 panel), which was itself a port of the LyraZeroW SuperRetroPack.
 
-> **Status: bring-up.** The first image is built but not yet verified on hardware.
-> See `DevelopmentLog.md`.
+> **Status: early, working.** Boots to the launcher on HDMI 720p. NES games run on
+> the GPU (RetroArch reports `Mali-G31 MC1 (Panfrost)`, OpenGL ES 3.1), with HDMI
+> audio and a DualShock 3. The other systems are built but not yet tested on
+> this board. See `DevelopmentLog.md`.
 
 ---
 
