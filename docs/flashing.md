@@ -2,11 +2,22 @@
 
 ## Write the card
 
-`firmware/sdcard.img` (or `~/opi/output/images/sdcard.img`) is a complete
-card image: the SPL/TF-A/U-Boot blob at 8 KB, p1 = ext4 rootfs, p2 = FAT32 ROMs.
+`firmware/sdcard.img.xz` is a complete, compressed card image: the
+SPL/TF-A/U-Boot blob at 8 KB, p1 = 1 GiB ext4 rootfs, p2 = 27 GiB FAT32 ROMs.
+It is sized for a **32 GB card**: the uncompressed image is 30.07e9 bytes, and
+32 GB cards hold roughly 30.5e9 to 32.0e9. For other card sizes, rebuild with
+`RETROOPI_ROMS_SIZE_MB=<MiB>` (see `post-image.sh`).
 
-- **Windows:** balenaEtcher or Rufus (DD mode). Pick the right disk.
-- **Linux:** `sudo dd if=sdcard.img of=/dev/sdX bs=4M conv=fsync status=progress`
+- **Windows:** balenaEtcher or Rufus (DD mode). Both take the `.xz` directly.
+  Pick the right disk. Writing takes a while: the card gets all ~30 GB.
+
+**Faster alternative: `firmware/sdcard-small.img`** (2 GiB ROM partition,
+built with `RETROOPI_ROMS_SIZE_MB=2048 IMAGE_TAG=small`). It flashes in about a
+minute. Then grow `RETROROMS` to fill the card from Windows. **Disk Management
+cannot extend FAT32**, so use a partition tool such as MiniTool Partition Wizard
+or AOMEI Partition Assistant. The ROM partition is the last one on the card, so
+it can grow in place, and the board mounts it the same way at any size.
+- **Linux:** `xz -dc sdcard.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress`
 
 A reflash **wipes the ROM partition**. For day-to-day iteration, push files
 over SSH (`scripts/board.sh push`) instead of reflashing.

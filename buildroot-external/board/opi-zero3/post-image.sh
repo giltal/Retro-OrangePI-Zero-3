@@ -17,7 +17,13 @@ BINARIES_DIR="$1"
 shift
 
 ROMS_IMG="${BINARIES_DIR}/roms.vfat"
-ROMS_SIZE_MB="${RETROOPI_ROMS_SIZE_MB:-2048}"
+# Default sized for a 32 GB card. "32 GB" cards are sold in decimal GB, and
+# their real capacity varies by brand from ~30.5e9 to ~32.0e9 bytes. The whole
+# image is 1 MiB (bootloader) + 1024 MiB (rootfs) + this, so 27648 MiB makes
+# a 28673 MiB (30.07e9 byte) image, which fits every 32 GB card seen so far.
+# Override for other cards, e.g. RETROOPI_ROMS_SIZE_MB=2048 for a small
+# dev image, or ~57000 for a 64 GB card.
+ROMS_SIZE_MB="${RETROOPI_ROMS_SIZE_MB:-27648}"
 LABEL="RETROROMS"
 
 MKFS_VFAT="${HOST_DIR}/sbin/mkfs.vfat"
@@ -33,7 +39,10 @@ fi
 
 echo "post-image.sh: creating ${ROMS_SIZE_MB} MiB FAT32 ROM partition"
 rm -f "$ROMS_IMG"
-dd if=/dev/zero of="$ROMS_IMG" bs=1M count="$ROMS_SIZE_MB" status=none
+# Sparse, not dd from /dev/zero: at 27 GiB that is 27 GiB of zeros written to
+# the build disk every image build. mkfs.vfat only writes the boot sector and
+# FATs, and everything else stays a hole, which genimage and xz both skip cheaply.
+truncate -s "${ROMS_SIZE_MB}M" "$ROMS_IMG"
 "$MKFS_VFAT" -F 32 -n "$LABEL" "$ROMS_IMG" >/dev/null
 
 # One directory per system the launcher knows about, so the folder names on the

@@ -301,3 +301,32 @@ S11alsa even logged `FAIL (no Master control)` at boot, but nobody reads the boo
 and added a post-build guard: the name S11alsa creates must appear in the launcher and volumed
 binaries. Verified on the board: set/get works and `amixer sset Master` sees it. Restored the level to
 the launcher's saved 40%.
+
+### ROM partition sized for a 32 GB card
+
+The user flashes 32 GB cards, and 2 GiB of ROM space was far too small. `post-image.sh` now defaults
+`ROMS_SIZE_MB` to **27648 MiB**, making the image 28673 MiB = **30.07e9 bytes**. "32 GB" cards
+really hold ~30.5e9–32.0e9 bytes depending on brand, so this fits all of them at the cost of up to
+~2 GB. It can be overridden with `RETROOPI_ROMS_SIZE_MB`.
+
+- `roms.vfat` is now made with `truncate` (sparse) instead of `dd if=/dev/zero`. genimage kept the
+  holes: 29 GB apparent, 550 MB on disk. Image generation stays about 1 min.
+- `build.sh` now delivers **`firmware/sdcard.img.xz` (126 MB)**. Etcher and Rufus flash `.xz`
+  directly. The raw `.img` is only copied to `/mnt/c` when it is ≤ 4 GiB, because NTFS would
+  materialise every hole.
+- Verified: MBR p1 1 GiB / p2 27 GiB (type 0x0c). `fsck.fat -n` is clean. FAT32 with 16 KiB clusters,
+  28,976,381,952 bytes free, the system folders and README present. `xz -t` passes, and the
+  decompressed stream's md5 equals the built image (`0f6dd6e4…`).
+
+**Follow-up: flashing time.** The 32 GB image works, but the flashing tool writes all 30 GB,
+where the old image took about a minute. The user prefers to flash a small image and grow the FAT
+partition on Windows. `build.sh` gained `IMAGE_TAG`, so variants sit side by side:
+`RETROOPI_ROMS_SIZE_MB=2048 IMAGE_TAG=small` gives `firmware/sdcard-small.img` (3.2 GB raw, p2 =
+2 GiB, md5 `9efc4c79…`) plus `.xz`, next to the 32 GB `sdcard.img.xz`, which was kept unchanged. Note:
+Windows Disk Management cannot extend FAT32 (NTFS only). It needs a third-party tool (MiniTool /
+AOMEI). p2 is the last partition, so growing it in place is safe.
+
+Tooling note: an inline Python edit of this log died on Windows' cp1252 default encoding (the
+`≤` above) **after** `open(p, 'w')` had already truncated the file to 0 bytes. It was restored from
+git, since all prior entries were committed. Use the Edit tool for these docs, or pass
+`encoding='utf-8'`. Never open-for-write a file you haven't committed.

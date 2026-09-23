@@ -55,8 +55,26 @@ else
 fi
 
 if [ $# -eq 0 ]; then
-	mkdir -p "$PROJ/firmware"
-	cp "$OUT/images/sdcard.img" "$PROJ/firmware/sdcard.img"
-	md5sum "$OUT/images/sdcard.img" | tee "$PROJ/firmware/sdcard.img.md5"
-	ls -la "$OUT/images/"
+	F="$PROJ/firmware"
+	I="$OUT/images/sdcard.img"
+	mkdir -p "$F"
+	# IMAGE_TAG names the deliverable, so image variants can sit side by side:
+	#   bash build.sh                                          -> sdcard.img.xz (32 GB card)
+	#   RETROOPI_ROMS_SIZE_MB=2048 IMAGE_TAG=small bash build.sh -> sdcard-small.img(.xz)
+	# The small one flashes in about a minute; its FAT partition is last on the
+	# card, so it can be grown afterwards with a partition tool.
+	N="sdcard${IMAGE_TAG:+-$IMAGE_TAG}"
+	# The image is sized for a 32 GB card (see ROMS_SIZE_MB in post-image.sh)
+	# and is almost entirely empty FAT space, sparse on the WSL side. Copying it
+	# raw to /mnt/c would write every hole out as real zeros, so the
+	# deliverable is xz-compressed: Etcher and Rufus both flash .xz directly.
+	# The raw .img is only copied when it is small enough to be convenient.
+	rm -f "$F/$N.img" "$F/$N.img.md5"
+	echo "build.sh: compressing $N.img ($(du -h --apparent-size "$I" | cut -f1) apparent, $(du -h "$I" | cut -f1) on disk)"
+	xz -T0 -3 -c "$I" > "$F/$N.img.xz.tmp" && mv "$F/$N.img.xz.tmp" "$F/$N.img.xz"
+	if [ "$(stat -c %s "$I")" -le $((4 * 1024 * 1024 * 1024)) ]; then
+		cp --sparse=always "$I" "$F/$N.img"
+	fi
+	md5sum < "$I" | sed "s|-\$|$N.img|" | tee "$F/$N.img.md5"
+	ls -la "$F"
 fi
