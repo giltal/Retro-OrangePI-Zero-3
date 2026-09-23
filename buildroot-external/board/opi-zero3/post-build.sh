@@ -63,6 +63,17 @@ grep -q '^audio_driver = "alsathread"' "$racfg" \
 grep -q '^audio_device = "default"' "$racfg" \
 	|| fail "audio_device is not \"default\" -- volume would not reach games"
 
+# The softvol control S11alsa creates must be the one the launcher and volumed
+# drive. softvol takes the name verbatim; the first image created 'Master'
+# while both programs asked for 'Master Playback Volume', so volume silently
+# did nothing while sound played fine.
+grep -q 'name "Master Playback Volume"' "$TARGET_DIR/etc/init.d/S11alsa" \
+	|| fail "S11alsa does not create the 'Master Playback Volume' softvol control"
+for b in usr/bin/retroopi_launcher usr/bin/volumed; do
+	strings "$TARGET_DIR/$b" | grep -q "'Master Playback Volume'" \
+		|| fail "$b does not use the 'Master Playback Volume' control"
+done
+
 # Kernel and DTB where extlinux.conf says they are. A wrong fdt path boots to
 # nothing at all, with the only clue on the serial console.
 ext="$TARGET_DIR/boot/extlinux/extlinux.conf"

@@ -280,4 +280,24 @@ Open items from this session:
   S40network backgrounds `ifup`, and the hot-plug rule should catch a late link.
 - Not yet verified on the board: the renderer string (`Mali-G31 (Panfrost)`), panfrost devfreq, and
   the S11alsa card choice (card 1 "HDMI" expected).
-- The A/B DRAM test images in `firmware/` (from the Zero2 detour) can be deleted.
+- The A/B DRAM test images in `firmware/` (from the Zero2 detour) can be deleted. *(Done.)*
+
+### Verified on the board (network back, same IP .85)
+
+- panfrost probes at 2.2 s: `mali-g31 id 0x7093`, `/dev/dri/renderD128` present, GPU at
+  **432 MHz fixed**. There is no devfreq entry because the H616 DT has no GPU OPP table.
+  Possible future tuning.
+- RetroArch (NES, 8 s run over SSH):
+  `[GL]: Found GL context: "kms"`, `Renderer: Mali-G31 MC1 (Panfrost)`,
+  `Version: OpenGL ES 3.1 Mesa 26.0.1`.
+- S11alsa chose **card 1 "HDMI"** (`ahub_plat-i2s-hifi`). Card 0 is the analog "H616 Audio Codec".
+- rcS finished at 5.35 s.
+
+**Bug: the volume control never worked.** `amixer: Cannot find the given element`. softvol
+uses its `control.name` **verbatim**. S11alsa said `name "Master"`, which created a control
+literally named `Master`, while the launcher, volumed and S11alsa's own check all ask for
+`'Master Playback Volume'`. Sound played at the default level and every volume change went nowhere.
+S11alsa even logged `FAIL (no Master control)` at boot, but nobody reads the boot log. Fixed the name
+and added a post-build guard: the name S11alsa creates must appear in the launcher and volumed
+binaries. Verified on the board: set/get works and `amixer sset Master` sees it. Restored the level to
+the launcher's saved 40%.

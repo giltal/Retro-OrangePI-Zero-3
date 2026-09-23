@@ -62,7 +62,11 @@ pcm.retroopi_softvol {
 	type softvol
 	slave.pcm "hw:$card,0"
 	control {
-		name "Master"
+		# softvol uses this name VERBATIM. The first version said "Master",
+		# which created a control literally named 'Master', so every
+		# lookup of 'Master Playback Volume' (launcher, volumed, this script)
+		# failed while sound itself played fine.
+		name "Master Playback Volume"
 		card $card
 	}
 	min_dB -40.0
