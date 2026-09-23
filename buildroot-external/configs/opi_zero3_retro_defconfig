@@ -5,8 +5,8 @@
 # The board layer (arch, kernel, TF-A, U-Boot) is modelled on Buildroot's own
 # configs/orangepi_zero3_defconfig.
 #
-# Output: HDMI at 1280x720. See RETROOPI_LAUNCHER_SCREEN_W/H below and
-# video_fullscreen_x/y in retroarch.cfg; those three places must agree.
+# Output: HDMI at 1920x1080. See RETROOPI_LAUNCHER_SCREEN_W/H below and
+# video_fullscreen_x/y in retroarch.cfg. They must agree (post-build.sh checks).
 
 # --- Architecture -------------------------------------------------------
 # AArch64, not the reference's 32-bit ARMv7. The cores that matter have
@@ -131,11 +131,12 @@ BR2_PACKAGE_MESA3D_OPENGL_ES=y
 # for TTF/PNG surfaces; the launcher does its own KMS.
 BR2_PACKAGE_RETROOPI_LAUNCHER=y
 # HDMI mode the launcher asks the TV for. It is also the size of the launcher's
-# framebuffer, so it must be a mode the TV offers. 1280x720@60 is
-# CEA-mandatory for any HDMI sink, which makes it the safe default. 1920x1080
-# later: change these, and video_fullscreen_x/y in retroarch.cfg.
-BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W=1280
-BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_H=720
+# framebuffer, so it must be a mode the TV offers. 1920x1080@60 is what
+# essentially every TV offers. 1280x720@60 is the fallback (CEA-mandatory for
+# every HDMI sink). Must match video_fullscreen_x/y in retroarch.cfg;
+# post-build.sh fails the build if they differ.
+BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W=1920
+BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_H=1080
 
 # --- RetroArch ----------------------------------------------------------
 BR2_PACKAGE_RETROARCH=y

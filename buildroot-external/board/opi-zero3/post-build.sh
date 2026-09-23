@@ -40,6 +40,18 @@ sed -i '/^tty1::/d; /^# RetroOPI: HDMI console/d' "$TARGET_DIR/etc/inittab"
 printf '# RetroOPI: HDMI console (added by post-build.sh)\ntty1::respawn:/sbin/getty 38400 tty1\n' \
 	>> "$TARGET_DIR/etc/inittab"
 
+# --- Dev convenience: this build host's SSH key ---------------------------
+# Every reflash wiped /root/.ssh/authorized_keys, so board.sh stopped working
+# until the key was installed again by hand with the root password. If the
+# BUILD HOST has the dev key, bake its PUBLIC half into this image. Nothing
+# enters the repository: an image built anywhere else simply gets no key.
+devkey="$HOME/.ssh/retroopi_ed25519.pub"
+if [ -f "$devkey" ]; then
+	install -d -m 700 "$TARGET_DIR/root/.ssh"
+	install -m 600 "$devkey" "$TARGET_DIR/root/.ssh/authorized_keys"
+	echo "post-build.sh: dev SSH key from $devkey installed for root"
+fi
+
 # --- Guards ---------------------------------------------------------------
 # Exactly one launcher init script.
 n=$(ls "$TARGET_DIR"/etc/init.d/S??launcher 2>/dev/null | wc -l)
@@ -73,6 +85,23 @@ for b in usr/bin/retroopi_launcher usr/bin/volumed; do
 	strings "$TARGET_DIR/$b" | grep -q "'Master Playback Volume'" \
 		|| fail "$b does not use the 'Master Playback Volume' control"
 done
+
+# The launcher and RetroArch must ask the TV for the SAME mode. If they differ,
+# every game launch and exit is a full HDMI re-sync (seconds of black), and a
+# mismatch is easy to create: one value is in the defconfig, the other in
+# retroarch.cfg.
+sw=$(sed -n 's/^BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W=//p' "$BR2_CONFIG")
+sh=$(sed -n 's/^BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_H=//p' "$BR2_CONFIG")
+rx=$(sed -n 's/^video_fullscreen_x = "\([0-9]*\)"/\1/p' "$racfg")
+ry=$(sed -n 's/^video_fullscreen_y = "\([0-9]*\)"/\1/p' "$racfg")
+[ "$sw" = "$rx" ] && [ "$sh" = "$ry" ] \
+	|| fail "launcher ${sw}x${sh} but retroarch.cfg video_fullscreen ${rx}x${ry}"
+
+# Enough CMA for the scanout buffers at this resolution. At 1080p the kernel's
+# default 32 MiB pool ran out and every game launch failed with
+# "DRM_IOCTL_MODE_CREATE_DUMB failed: Cannot allocate memory".
+grep -q ' cma=[0-9]*M' "$TARGET_DIR/boot/extlinux/extlinux.conf" \
+	|| fail "extlinux.conf has no cma= -- 1080p scanout buffers will not fit in the default 32 MiB"
 
 # Kernel and DTB where extlinux.conf says they are. A wrong fdt path boots to
 # nothing at all, with the only clue on the serial console.

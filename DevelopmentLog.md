@@ -326,6 +326,43 @@ partition on Windows. `build.sh` gained `IMAGE_TAG`, so variants sit side by sid
 Windows Disk Management cannot extend FAT32 (NTFS only). It needs a third-party tool (MiniTool /
 AOMEI). p2 is the last partition, so growing it in place is safe.
 
+**User test: N64 and PSX run smoothly** (by eye and ear, not yet measured). These are the two
+heavy systems. On the reference, N64 only reached real-time at 320x240 with a tuned `.opt`. It still
+runs with that same inherited `.opt` here (parallel-n64, rice, 320x240), so this is the floor, not the
+ceiling. Next, measured the reference's way (vblank-counted fps, the audio-seconds/wall-seconds
+ratio, under gameplay rather than attract mode): 640x480 via Settings → N64 Quality, and
+mupen64plus-next (GLES3) as a candidate.
+
+### 1080p
+
+`SCREEN_W/H` → 1920×1080 in the defconfig and `video_fullscreen_x/y` → 1920/1080 in retroarch.cfg.
+A new post-build guard fails the build if the two differ, because a mismatch means a full HDMI
+re-sync on every game launch and exit. Deployed without reflashing (`board.sh push` of the launcher and
+retroarch.cfg): the launcher reports `DRM: mode 1920x1080@60`, ready in 276 ms, ~0% CPU idle.
+UI_SCALE is 2.25× at this height.
+
+The card had been reflashed (to the 32 GB image), which wiped `authorized_keys`, so board.sh was
+locked out until the key was installed again by hand. **post-build.sh now bakes the build host's
+`~/.ssh/retroopi_ed25519.pub` into the image** when that file exists. It never enters the repository,
+and images built elsewhere get no key.
+
+**1080p broke game launch.** RetroArch initialised GL fine at 1920x1080 and then died (status -1):
+
+    DRM_IOCTL_MODE_CREATE_DUMB failed: Cannot allocate memory
+    MESA: error: Failed to create scanout resource
+
+Scanout buffers come from CMA, and arm64 defconfig reserves **32 MiB**, with `CmaFree` only 6 MB while
+the launcher was idle. One 1080p XRGB buffer is 8 MiB: fbcon holds one, the launcher double-buffers,
+and RetroArch/Mesa needs ~3 more. At 720p it all fitted by luck (2.25x smaller). Fixed with
+**`cma=256M`** on the kernel command line (extlinux.conf, deployable without a kernel rebuild), plus a
+post-build guard that extlinux carries a `cma=`. User: **games run at 1080p**.
+
+**Networking after reboot (open):** after the `reboot` that applied cma=256M, the board was again
+absent from the network, while the user was playing games on it. So the earlier "the SSH reboot never
+came back" was probably a misreading. The board reboots fine; **Ethernet doesn't come up on
+warm boots** (the first boot after a flash had network). Suspects: YT8531 PHY state after a warm
+reset, or DHCP timing. It needs the serial console, or a boot-time network log on the FAT partition.
+
 Tooling note: an inline Python edit of this log died on Windows' cp1252 default encoding (the
 `≤` above) **after** `open(p, 'w')` had already truncated the file to 0 bytes. It was restored from
 git, since all prior entries were committed. Use the Edit tool for these docs, or pass
