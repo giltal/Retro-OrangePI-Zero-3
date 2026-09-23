@@ -357,11 +357,21 @@ and RetroArch/Mesa needs ~3 more. At 720p it all fitted by luck (2.25x smaller).
 **`cma=256M`** on the kernel command line (extlinux.conf, deployable without a kernel rebuild), plus a
 post-build guard that extlinux carries a `cma=`. User: **games run at 1080p**.
 
-**Networking after reboot (open):** after the `reboot` that applied cma=256M, the board was again
-absent from the network, while the user was playing games on it. So the earlier "the SSH reboot never
-came back" was probably a misreading. The board reboots fine; **Ethernet doesn't come up on
-warm boots** (the first boot after a flash had network). Suspects: YT8531 PHY state after a warm
-reset, or DHCP timing. It needs the serial console, or a boot-time network log on the FAT partition.
+**Networking after reboot: FIXED.** After the `reboot` that applied cma=256M, the board was again
+absent from the network while the user played games on it. The board reboots fine, but **Ethernet
+does not survive a warm reboot**. The user confirmed it: only a hard power cycle brings the network
+back.
+
+Two of my earlier checks had been invalid and should not have been used as evidence. One wait loop was
+piped through PowerShell's `Select-Object -First 3`, which killed it after three lines. The other
+ran immediately after the reboot. A proper test (poll for 180 s) confirmed: not back.
+
+Root cause (a known Zero3 problem, see the DietPi forum): `S40network stop` ran `ifdown -a`. Bringing
+eth0 down ends in `phy_suspend()` → `BMCR_PDOWN`, which powers the YT8531 PHY off. The board has
+no PHY reset line and the PHY supply stays on across a warm reset, so the next kernel's EMAC reset
+waits for a clock that never comes. **Fix:** `stop` now only releases the DHCP lease (udhcpc SIGUSR2)
+and stops the clients, leaving eth0 up. Two warm reboots: back after 21 s and 19 s, link up at ~8.4 s,
+same lease.
 
 Tooling note: an inline Python edit of this log died on Windows' cp1252 default encoding (the
 `≤` above) **after** `open(p, 'w')` had already truncated the file to 0 bytes. It was restored from

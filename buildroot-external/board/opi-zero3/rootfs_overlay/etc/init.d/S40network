@@ -23,9 +23,29 @@ case "$1" in
 	echo "OK"
 	;;
   stop)
-	printf "Stopping network: "
-	/sbin/ifdown -a
-	[ $? = 0 ] && echo "OK" || echo "FAIL"
+	# DO NOT take eth0 down at shutdown. (It used to be `ifdown -a`.)
+	#
+	# On the Zero3, bringing eth0 down ends in phy_suspend() -> BMCR_PDOWN,
+	# which powers the YT8531 PHY off. The board has no PHY reset line and the
+	# PHY's supply stays on across a WARM reboot, so the next kernel finds the
+	# PHY still powered down, the EMAC reset waits for a clock that never comes,
+	# and the board comes up with no network until it is power-cycled.
+	# Measured: `reboot` -> not on the network within 180 s. Power cycle -> link
+	# up at 9.4 s. Same failure and workaround as reported for Armbian/DietPi
+	# on this board.
+	#
+	# So only release the DHCP lease and stop the clients. The link stays up
+	# and the kernel resets the PHY properly on the way down.
+	printf "Stopping network (eth0 left up, see S40network): "
+	for pf in /var/run/udhcpc.*.pid; do
+		[ -f "$pf" ] || continue
+		kill -USR2 "$(cat "$pf")" 2>/dev/null	# release the lease
+		sleep 1
+		kill "$(cat "$pf")" 2>/dev/null
+		rm -f "$pf"
+	done
+	killall udhcpc 2>/dev/null
+	echo "OK"
 	;;
   restart|reload)
 	"$0" stop
