@@ -36,7 +36,7 @@ ifneq ($(SYSROOT),)
 LDFLAGS += --sysroot=$(SYSROOT)
 endif
 # No -lrga: there is no RGA2 engine off Rockchip (see gfx_accel.c).
-LDFLAGS += -lSDL2_ttf -lSDL2_image -lSDL2 -ldrm -lfreetype -lpthread -lm
+LDFLAGS += -lSDL2_ttf -lSDL2_image -lSDL2 -ldrm -lfreetype -lz -lpthread -lm
 
 all: $(TARGET)
 

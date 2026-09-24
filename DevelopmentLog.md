@@ -613,3 +613,27 @@ Tooling note: an inline Python edit of this log died on Windows' cp1252 default 
 `≤` above) **after** `open(p, 'w')` had already truncated the file to 0 bytes. It was restored from
 git, since all prior entries were committed. Use the Edit tool for these docs, or pass
 `encoding='utf-8'`. Never open-for-write a file you haven't committed.
+
+**Full game names in the launcher (arcade and PSP).** Arcade ROMs are named after the emulator's
+driver (`mslug.zip`), and PSP dumps after the release group (`psy-acb.iso`). The launcher now
+resolves a display name in this order (`rom_display_name()` in launcher.c):
+1. the folder's `gamenames.txt`: the user's own names always win;
+2. the arcade core's driver list, `/usr/share/retroopi/names/{fbalpha2012,mame2003plus}.txt`.
+   post-build.sh generates it with `scripts/gen-arcade-names.py` from the source of the exact core
+   versions being built: 5984 FBA and 4486 MAME titles. Neo Geo catalogue codes ("(NGM-2410)") are
+   dropped; variant tags ("(World)", "(bootleg)") are kept;
+3. the PSP disc's own `TITLE` from `PSP_GAME/PARAM.SFO`, read from `.iso`, `.cso` (zlib, so the
+   launcher now links `-lz`) or `.pbp`. ™/®/© and trailing spaces are dropped because the font has
+   no glyph for them. Tested on the four ISOs and on a CSO made from one of them:
+   "Assassin's Creed: Bloodlines", "Castlevania The Dracula X Chronicles", "LittleBigPlanet",
+   "METAL GEAR SOLID PEACE WALKER";
+4. the file name.
+
+BIOS sets (marked `*` in the tables: `neogeo`, `stvbios`, `pgm` …) and `gngeo_data` are hidden from
+the lists and from the game counts. Neo Geo now shows 32 games, down from 34. The files stay on the
+card, because the cores need the BIOS. post-build.sh fails the build if a table comes out short or
+`neogeo` is not marked as BIOS.
+- Trap: FBA defines `neogeo` more than once (the BIOS-only board and system variants). The first
+  generator let a later non-BIOS entry overwrite the BIOS mark. Now any BIOS definition wins.
+- Trap: `PARAM.SFO` in Assassin's Creed sits at LBA 54960 (~107 MB). A test CSO made from the
+  first 96 MB therefore "failed". The test was the problem, not the reader.

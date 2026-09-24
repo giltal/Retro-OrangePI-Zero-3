@@ -54,6 +54,25 @@ if [ -f "$devkey" ]; then
 	echo "post-build.sh: dev SSH key from $devkey installed for root"
 fi
 
+# --- Arcade game titles for the launcher ----------------------------------
+# Arcade ROMs are named after the emulator's driver ("mslug.zip"). The full
+# titles are extracted from the source of the exact FBA 2012 / MAME 2003-Plus
+# versions being built, so the launcher can show "Metal Slug - Super
+# Vehicle-001" and hide BIOS sets (neogeo.zip). See scripts/gen-arcade-names.py.
+names_dir="$TARGET_DIR/usr/share/retroopi/names"
+fba_src=$(ls -d "$BUILD_DIR"/libretro-fbalpha2012-*/ 2>/dev/null | head -n 1)
+mame_src=$(ls -d "$BUILD_DIR"/libretro-mame2003plus-*/ 2>/dev/null | head -n 1)
+[ -n "$fba_src" ] || fail "libretro-fbalpha2012 build dir not found in $BUILD_DIR"
+[ -n "$mame_src" ] || fail "libretro-mame2003plus build dir not found in $BUILD_DIR"
+python3 "$BR2_EXTERNAL_RETROOPI_PATH/../scripts/gen-arcade-names.py" \
+	"$fba_src" "$mame_src" "$names_dir"
+for t in fbalpha2012 mame2003plus; do
+	n=$(wc -l < "$names_dir/$t.txt")
+	[ "$n" -gt 1000 ] || fail "$names_dir/$t.txt has only $n titles"
+done
+grep -qx 'neogeo=\*Neo Geo' "$names_dir/fbalpha2012.txt" \
+	|| fail "neogeo is not marked as a BIOS set in fbalpha2012.txt"
+
 # --- Guards ---------------------------------------------------------------
 # Exactly one launcher init script.
 n=$(ls "$TARGET_DIR"/etc/init.d/S??launcher 2>/dev/null | wc -l)

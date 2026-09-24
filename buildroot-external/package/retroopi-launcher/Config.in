@@ -9,6 +9,7 @@ config BR2_PACKAGE_RETROOPI_LAUNCHER
 	# launcher hard-fails on IMG_Init(IMG_INIT_PNG).
 	select BR2_PACKAGE_LIBPNG
 	select BR2_PACKAGE_FREETYPE
+	select BR2_PACKAGE_ZLIB  # PSP titles from compressed .cso images
 	help
 	  Retro gaming launcher: DRM/KMS framebuffer UI with system browser,
 	  ROM list, favourites, recents, themes, search keyboard and

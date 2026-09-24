@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -45,6 +46,7 @@
 #include <time.h>
 #include <math.h>
 #include <linux/input.h>
+#include <zlib.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -386,6 +388,332 @@ static const char *gamenames_lookup_path(const char *rom_full_path)
 
     gamenames_load(dir);
     return gamenames_lookup(rom_full_path);
+}
+
+/* =========================================================================
+ * Display names: arcade core tables and PSP disc titles
+ *
+ * Arcade ROMs are named after the emulator's driver ("mslug.zip"), and PSP
+ * dumps often carry release-group names ("psy-acb.iso"). Neither is the
+ * game's name. Resolution order, see rom_display_name():
+ *   1. the folder's gamenames.txt       (the user's own names always win)
+ *   2. the arcade core's driver list    (/usr/share/retroopi/names/<core>.txt,
+ *                                        generated at build time from the
+ *                                        core's own source, gen-arcade-names.py)
+ *   3. the PSP disc's own title         (PSP_GAME/PARAM.SFO, TITLE)
+ *   4. the file name
+ * ========================================================================= */
+
+#define NAMES_DIR "/usr/share/retroopi/names"
+
+typedef struct {
+    const char *core_file;   /* g_systems[].core_file it applies to */
+    const char *path;
+    bool loaded;
+    char *blob;              /* whole file, split in place */
+    char **key, **val;
+    int n;
+} NameTable;
+
+static NameTable g_name_tables[] = {
+    { "fbalpha2012_libretro.so",  NAMES_DIR "/fbalpha2012.txt",  false, NULL, NULL, NULL, 0 },
+    { "mame2003plus_libretro.so", NAMES_DIR "/mame2003plus.txt", false, NULL, NULL, NULL, 0 },
+};
+
+static NameTable *name_table_for(int sys_idx)
+{
+    if (sys_idx < 0) return NULL;
+    for (size_t i = 0; i < sizeof(g_name_tables) / sizeof(g_name_tables[0]); i++) {
+        NameTable *t = &g_name_tables[i];
+        if (strcmp(t->core_file, g_systems[sys_idx].core_file) != 0) continue;
+        if (!t->loaded) {
+            t->loaded = true;           /* once, even if it fails */
+            FILE *f = fopen(t->path, "r");
+            if (!f) return t;
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            t->blob = malloc((size_t)sz + 1);
+            if (!t->blob || fread(t->blob, 1, (size_t)sz, f) != (size_t)sz) {
+                free(t->blob); t->blob = NULL; fclose(f); return t;
+            }
+            fclose(f);
+            t->blob[sz] = '\0';
+            int lines = 0;
+            for (long j = 0; j < sz; j++) if (t->blob[j] == '\n') lines++;
+            t->key = malloc(sizeof(char *) * (size_t)(lines + 1));
+            t->val = malloc(sizeof(char *) * (size_t)(lines + 1));
+            if (!t->key || !t->val) return t;
+            char *p = t->blob;
+            while (*p) {
+                char *nl = strchr(p, '\n');
+                if (nl) *nl = '\0';
+                char *eq = strchr(p, '=');
+                if (eq && eq != p) {
+                    *eq = '\0';
+                    t->key[t->n] = p;
+                    t->val[t->n] = eq + 1;
+                    t->n++;
+                }
+                if (!nl) break;
+                p = nl + 1;
+            }
+            printf("NAMES: %d arcade titles from %s\n", t->n, t->path);
+        }
+        return t;
+    }
+    return NULL;
+}
+
+/* Arcade title for a short name, or NULL. A leading '*' marks a BIOS set.
+ * The file is written sorted (byte order), so a binary search is exact. */
+static const char *arcade_lookup(int sys_idx, const char *shortname)
+{
+    NameTable *t = name_table_for(sys_idx);
+    if (!t || t->n == 0) return NULL;
+    char low[64];
+    size_t i;
+    for (i = 0; shortname[i] && i < sizeof(low) - 1; i++)
+        low[i] = (char)tolower((unsigned char)shortname[i]);
+    low[i] = '\0';
+    int lo = 0, hi = t->n - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) / 2;
+        int c = strcmp(low, t->key[mid]);
+        if (c == 0) return t->val[mid];
+        if (c < 0) hi = mid - 1; else lo = mid + 1;
+    }
+    return NULL;
+}
+
+/* --- PSP: TITLE from PARAM.SFO inside an ISO, CSO or PBP --------------- */
+
+static uint32_t rd32(const unsigned char *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static uint16_t rd16(const unsigned char *p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+typedef struct {
+    FILE *f;
+    bool cso;
+    uint32_t block_size;
+    uint32_t align;
+} DiscReader;
+
+/* Read 2048 bytes at byte offset pos (sector aligned) from an ISO or CSO. */
+static bool disc_read(DiscReader *r, uint64_t pos, unsigned char *out)
+{
+    if (!r->cso) {
+        if (fseeko(r->f, (off_t)pos, SEEK_SET) != 0) return false;
+        return fread(out, 1, 2048, r->f) == 2048;
+    }
+    /* CSO: index entry per block; bit 31 = stored uncompressed; the offset is
+     * (entry & 0x7fffffff) << align; the block ends where the next begins.
+     * Only the two index entries needed are read, not the whole index
+     * (a 1.5 GB image has ~750k of them). */
+    uint32_t bs = r->block_size;
+    if (bs < 2048 || bs % 2048) return false;
+    uint64_t block = pos / bs;
+    unsigned char ix[8];
+    if (fseeko(r->f, (off_t)(24 + block * 4), SEEK_SET) != 0 || fread(ix, 1, 8, r->f) != 8)
+        return false;
+    uint32_t e0 = rd32(ix), e1 = rd32(ix + 4);
+    uint64_t off = (uint64_t)(e0 & 0x7fffffffu) << r->align;
+    uint64_t end = (uint64_t)(e1 & 0x7fffffffu) << r->align;
+    if (end <= off || end - off > bs + 1024) return false;
+    unsigned char *raw = malloc((size_t)(end - off));
+    unsigned char *blk = malloc(bs);
+    bool ok = false;
+    if (raw && blk && fseeko(r->f, (off_t)off, SEEK_SET) == 0 &&
+        fread(raw, 1, (size_t)(end - off), r->f) == (size_t)(end - off)) {
+        if (e0 & 0x80000000u) {
+            ok = (end - off) >= bs;
+            if (ok) memcpy(blk, raw, bs);
+        } else {
+            z_stream z;
+            memset(&z, 0, sizeof(z));
+            if (inflateInit2(&z, -15) == Z_OK) {     /* raw deflate */
+                z.next_in = raw;  z.avail_in = (uInt)(end - off);
+                z.next_out = blk; z.avail_out = bs;
+                int zr = inflate(&z, Z_FINISH);
+                ok = (zr == Z_STREAM_END || zr == Z_OK) && z.avail_out == 0;
+                inflateEnd(&z);
+            }
+        }
+        if (ok) memcpy(out, blk + (pos % bs), 2048);
+    }
+    free(raw);
+    free(blk);
+    return ok;
+}
+
+/* Find name (case-insensitive, ";1" version suffix ignored) in an ISO9660
+ * directory. Returns its extent and size. */
+static bool iso_find(DiscReader *r, uint32_t dir_lba, uint32_t dir_size,
+                     const char *name, uint32_t *lba, uint32_t *size)
+{
+    unsigned char sec[2048];
+    size_t nlen = strlen(name);
+    for (uint32_t done = 0; done < dir_size; done += 2048) {
+        if (!disc_read(r, (uint64_t)(dir_lba + done / 2048) * 2048, sec)) return false;
+        for (int o = 0; o < 2048; ) {
+            int len = sec[o];
+            if (len == 0 || o + len > 2048) break;          /* rest of sector unused */
+            int fl = sec[o + 32];
+            const char *fn = (const char *)&sec[o + 33];
+            if (o + 33 + fl <= 2048 && (size_t)fl >= nlen &&
+                strncasecmp(fn, name, nlen) == 0 &&
+                ((size_t)fl == nlen || fn[nlen] == ';')) {
+                *lba = rd32(&sec[o + 2]);
+                *size = rd32(&sec[o + 10]);
+                return true;
+            }
+            o += len;
+        }
+    }
+    return false;
+}
+
+/* TITLE from a PARAM.SFO image in memory. */
+static bool sfo_title(const unsigned char *s, size_t len, char *out, size_t outlen)
+{
+    if (len < 20 || memcmp(s, "\0PSF", 4) != 0) return false;
+    uint32_t keys = rd32(s + 8), data = rd32(s + 12), count = rd32(s + 16);
+    for (uint32_t i = 0; i < count && 20 + i * 16 + 16 <= len; i++) {
+        const unsigned char *e = s + 20 + i * 16;
+        uint32_t ko = keys + rd16(e), dlen = rd32(e + 4), dofs = data + rd32(e + 12);
+        if (ko >= len || dofs >= len || dofs + dlen > len) continue;
+        if (strcmp((const char *)s + ko, "TITLE") != 0) continue;
+        size_t n = strnlen((const char *)s + dofs, dlen);
+        if (n == 0) return false;
+        if (n >= outlen) n = outlen - 1;
+        /* Titles are UTF-8 and can hold newlines, trailing spaces and
+         * trademark signs ("LittleBigPlanet™ "). The signs are dropped, not
+         * drawn: the launcher font has no glyph for them. */
+        size_t w = 0;
+        for (size_t k = 0; k < n; k++) {
+            const unsigned char *c = s + dofs + k;
+            if (k + 2 < n && c[0] == 0xE2 && c[1] == 0x84 && c[2] == 0xA2) { k += 2; continue; } /* ™ */
+            if (k + 1 < n && c[0] == 0xC2 && (c[1] == 0xAE || c[1] == 0xA9)) { k += 1; continue; } /* ® © */
+            out[w++] = (char)(c[0] < 0x20 ? ' ' : c[0]);
+        }
+        while (w > 0 && out[w - 1] == ' ') w--;
+        out[w] = '\0';
+        return w > 0;
+    }
+    return false;
+}
+
+static bool psp_title_uncached(const char *path, char *out, size_t outlen)
+{
+    const char *dot = strrchr(path, '.');
+    if (!dot) return false;
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    bool ok = false;
+    unsigned char hdr[40];
+    size_t got = fread(hdr, 1, sizeof(hdr), f);
+
+    if (strcasecmp(dot, ".pbp") == 0) {
+        /* PBP header: "\0PBP", version, then section offsets; PARAM.SFO is
+         * the first section and ends where the icon section starts. */
+        if (got >= 16 && memcmp(hdr, "\0PBP", 4) == 0) {
+            uint32_t o = rd32(hdr + 8), e = rd32(hdr + 12);
+            if (e > o && e - o <= 65536) {
+                unsigned char *s = malloc(e - o);
+                if (s && fseeko(f, o, SEEK_SET) == 0 && fread(s, 1, e - o, f) == e - o)
+                    ok = sfo_title(s, e - o, out, outlen);
+                free(s);
+            }
+        }
+    } else if (strcasecmp(dot, ".iso") == 0 || strcasecmp(dot, ".cso") == 0) {
+        DiscReader r = { f, false, 2048, 0 };
+        if (got >= 24 && memcmp(hdr, "CISO", 4) == 0) {
+            r.cso = true;
+            r.block_size = rd32(hdr + 16);
+            r.align = hdr[21];
+        }
+        unsigned char pvd[2048];
+        uint32_t lba, size, sfo_lba, sfo_size;
+        if (disc_read(&r, 16 * 2048, pvd) && memcmp(pvd + 1, "CD001", 5) == 0 &&
+            iso_find(&r, rd32(pvd + 156 + 2), rd32(pvd + 156 + 10), "PSP_GAME", &lba, &size) &&
+            iso_find(&r, lba, size, "PARAM.SFO", &sfo_lba, &sfo_size) &&
+            sfo_size > 0 && sfo_size <= 65536) {
+            size_t n = (sfo_size + 2047) / 2048 * 2048;
+            unsigned char *s = malloc(n);
+            bool rd = s != NULL;
+            for (size_t k = 0; rd && k < n; k += 2048)
+                rd = disc_read(&r, (uint64_t)sfo_lba * 2048 + k, s + k);
+            if (rd) ok = sfo_title(s, sfo_size, out, outlen);
+            free(s);
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
+/* Small cache: the ROM list, Favorites and Recents all ask for the same
+ * titles, and each lookup is a few sector reads (plus inflate for CSO). */
+#define PSP_TITLE_CACHE 64
+static struct { char path[MAX_NAME]; char title[MAX_NAME]; bool ok; } g_psp_titles[PSP_TITLE_CACHE];
+static int g_psp_titles_next;
+
+static bool psp_title(const char *path, char *out, size_t outlen)
+{
+    for (int i = 0; i < PSP_TITLE_CACHE; i++) {
+        if (g_psp_titles[i].path[0] && strcmp(g_psp_titles[i].path, path) == 0) {
+            if (g_psp_titles[i].ok) snprintf(out, outlen, "%s", g_psp_titles[i].title);
+            return g_psp_titles[i].ok;
+        }
+    }
+    int slot = g_psp_titles_next++ % PSP_TITLE_CACHE;
+    snprintf(g_psp_titles[slot].path, MAX_NAME, "%s", path);
+    g_psp_titles[slot].ok = psp_title_uncached(path, g_psp_titles[slot].title, MAX_NAME);
+    if (g_psp_titles[slot].ok) snprintf(out, outlen, "%s", g_psp_titles[slot].title);
+    return g_psp_titles[slot].ok;
+}
+
+static void clean_display_name(const char *filename, char *out, int out_size);
+
+static void rom_short_name(const char *path, char *out, size_t outlen)
+{
+    const char *slash = strrchr(path, '/');
+    const char *base = slash ? slash + 1 : path;
+    const char *dot = strrchr(base, '.');
+    size_t len = dot ? (size_t)(dot - base) : strlen(base);
+    if (len >= outlen) len = outlen - 1;
+    memcpy(out, base, len);
+    out[len] = '\0';
+}
+
+/* Display name for a ROM file, in the order described above. */
+static void rom_display_name(const char *path, int sys_idx, char *out, size_t outlen)
+{
+    const char *g = gamenames_lookup_path(path);
+    if (g) { snprintf(out, outlen, "%s", g); return; }
+
+    char shortname[64];
+    rom_short_name(path, shortname, sizeof(shortname));
+    const char *a = arcade_lookup(sys_idx, shortname);
+    if (a) { snprintf(out, outlen, "%s", a[0] == '*' ? a + 1 : a); return; }
+
+    if (sys_idx >= 0 && strcmp(g_systems[sys_idx].core_file, "ppsspp_libretro.so") == 0 &&
+        psp_title(path, out, outlen))
+        return;
+
+    const char *slash = strrchr(path, '/');
+    clean_display_name(slash ? slash + 1 : path, out, (int)outlen);
+}
+
+/* Files in a ROM folder that are not games: BIOS sets the arcade tables
+ * mark with '*' (neogeo.zip, pgm.zip ...), and data for other emulators.
+ * They must stay on the card -- the cores need the BIOS -- just not listed. */
+static bool rom_is_hidden(const char *path, int sys_idx)
+{
+    char shortname[64];
+    rom_short_name(path, shortname, sizeof(shortname));
+    if (strcasecmp(shortname, "gngeo_data") == 0)   /* GnGeo's data, not a game */
+        return true;
+    const char *a = arcade_lookup(sys_idx, shortname);
+    return a && a[0] == '*';
 }
 
 /* =========================================================================
@@ -1382,7 +1710,7 @@ static int  g_recents_count = 0;
 
 /* Forward declarations */
 static bool favorites_contains(const char *path);
-static int  count_roms_in_dir(const char *dir_path);
+static int  count_roms_in_dir(const char *dir_path, int sys_idx);
 static bool input_just_pressed_or_repeat(uint32_t mask);
 
 /* Strip common ROM filename cruft for display */
@@ -1500,7 +1828,7 @@ static void menu_scan_systems(void)
          * game was in a subfolder. */
         char syspath[MAX_NAME];
         snprintf(syspath, sizeof(syspath), "%s/%s", ROMS_PATH, de->d_name);
-        if (count_roms_in_dir(syspath) == 0) continue;
+        if (count_roms_in_dir(syspath, sys_idx) == 0) continue;
 
         /* Check that the core exists */
         char corepath[MAX_NAME];
@@ -1514,7 +1842,7 @@ static void menu_scan_systems(void)
         strncpy(e->path, syspath, MAX_NAME - 1);
 
         /* Count ROMs and include in display name */
-        int rc = count_roms_in_dir(syspath);
+        int rc = count_roms_in_dir(syspath, sys_idx);
         e->rom_count = rc;
         snprintf(e->name, MAX_NAME, "%s (%d)", g_systems[sys_idx].display_name, rc);
     }
@@ -1648,13 +1976,13 @@ static void menu_scan_roms(int system_entry_idx)
         }
         if (strcmp(de->d_name, "gamenames.txt") == 0) continue;
 
+        char rom_path[MAX_NAME];
+        snprintf(rom_path, MAX_NAME, "%s/%s", sys_path, de->d_name);
+        if (rom_is_hidden(rom_path, sys_idx)) continue;
+
         MenuEntry *e = &g_menu.entries[g_menu.count++];
-        const char *fullname = gamenames_lookup(de->d_name);
-        if (fullname)
-            strncpy(e->name, fullname, MAX_NAME - 1);
-        else
-            clean_display_name(de->d_name, e->name, MAX_NAME);
-        snprintf(e->path, MAX_NAME, "%s/%s", sys_path, de->d_name);
+        rom_display_name(rom_path, sys_idx, e->name, MAX_NAME);
+        snprintf(e->path, MAX_NAME, "%s", rom_path);
         e->system_idx = sys_idx;
         e->rom_count = 0;
         e->is_favorite = favorites_contains(e->path);
@@ -1868,18 +2196,9 @@ static void menu_load_favorites(void)
         e->path[MAX_NAME - 1] = '\0';
         e->is_favorite = true;
 
-        /* Extract display name from path (use gamenames if available) */
-        const char *gname = gamenames_lookup_path(path);
-        if (gname) {
-            strncpy(e->name, gname, MAX_NAME - 1);
-        } else {
-            const char *slash = strrchr(path, '/');
-            const char *fname = slash ? slash + 1 : path;
-            clean_display_name(fname, e->name, MAX_NAME);
-        }
-
-        /* Find system index from path */
+        /* Find system index from path, then the display name */
         e->system_idx = system_from_path(path);
+        rom_display_name(path, e->system_idx, e->name, MAX_NAME);
 
         /* Append system name in parentheses */
         if (e->system_idx >= 0) {
@@ -1965,16 +2284,8 @@ static void menu_load_recents(void)
         e->path[MAX_NAME - 1] = '\0';
         e->is_favorite = favorites_contains(path);
 
-        const char *gname_r = gamenames_lookup_path(path);
-        if (gname_r) {
-            strncpy(e->name, gname_r, MAX_NAME - 1);
-        } else {
-            const char *slash = strrchr(path, '/');
-            const char *fname = slash ? slash + 1 : path;
-            clean_display_name(fname, e->name, MAX_NAME);
-        }
-
         e->system_idx = system_from_path(path);
+        rom_display_name(path, e->system_idx, e->name, MAX_NAME);
 
         /* Append system name in parentheses */
         if (e->system_idx >= 0) {
@@ -2051,7 +2362,7 @@ static void state_load(void)
 }
 
 /* Count ROMs in a system directory (for display in system list) */
-static int count_roms_in_dir(const char *dir_path)
+static int count_roms_in_dir(const char *dir_path, int sys_idx)
 {
     DIR *d = opendir(dir_path);
     if (!d) return 0;
@@ -2060,7 +2371,11 @@ static int count_roms_in_dir(const char *dir_path)
     while ((de = readdir(d)) != NULL) {
         if (de->d_name[0] == '.') continue;
         if (de->d_type != DT_DIR) {
-            count++;
+            /* Same filters as menu_scan_roms(): BIOS sets are not games. */
+            char p[MAX_NAME];
+            snprintf(p, sizeof(p), "%s/%s", dir_path, de->d_name);
+            if (strcmp(de->d_name, "gamenames.txt") != 0 && !rom_is_hidden(p, sys_idx))
+                count++;
         } else {
             /* A game folder (e.g. a Dreamcast GDI set) counts as one game,
              * matching what menu_scan_roms() lists. Without this, a system
