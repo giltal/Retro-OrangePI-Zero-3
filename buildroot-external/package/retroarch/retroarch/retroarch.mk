@@ -144,11 +144,14 @@ RETROARCH_POST_CONFIGURE_HOOKS += RETROARCH_FIX_DRM_INCLUDE
 # RETROARCH_LOG_FPS=1 turns on patch 0001: one "[Video]: FPS: x/target" line in
 # /tmp/retroarch_verbose.log every fps_update_interval frames (~4 s). That's
 # a few KB an hour, and it makes the real emulation speed measurable over SSH.
-# For cores that always deliver 60 fps (PPSSPP with frame duplication), FPS/60
-# is the emulation speed.
+# The FPS count is NOT emulation speed: frameskip, 30 fps games and
+# duplicated frames all change it (on the board it read 22 while the game clock
+# ran at 85%). For speed, RETROARCH_LOG_SPEED=1 turns on patch 0007:
+# "[Audio]: Speed: x%" every ~5 s, computed from how much emulated time the
+# core's audio covered per second of wall time.
 define RETROARCH_INSTALL_WRAPPER
 	mv $(TARGET_DIR)/usr/bin/retroarch $(TARGET_DIR)/usr/bin/retroarch.bin
-	printf '#!/bin/sh\nexport HOME=/root\nexport RETROARCH_LOG_FPS=1\nexec /usr/bin/retroarch.bin --verbose "$$@" 2>>/tmp/retroarch_verbose.log\n' > $(TARGET_DIR)/usr/bin/retroarch
+	printf '#!/bin/sh\nexport HOME=/root\nexport RETROARCH_LOG_FPS=1\nexport RETROARCH_LOG_SPEED=1\nexec /usr/bin/retroarch.bin --verbose "$$@" 2>>/tmp/retroarch_verbose.log\n' > $(TARGET_DIR)/usr/bin/retroarch
 	chmod +x $(TARGET_DIR)/usr/bin/retroarch
 endef
 RETROARCH_POST_INSTALL_TARGET_HOOKS += RETROARCH_INSTALL_WRAPPER

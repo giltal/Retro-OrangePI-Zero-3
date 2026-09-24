@@ -547,6 +547,33 @@ overclock (memory-bound, no gain), this workload is really GPU-bound.
 Still possible for Dreamcast: alpha sorting "per-strip (fast)" and 320x240 internal resolution,
 not tested yet.
 
+**CORRECTION: the FPS-log numbers in this session are not emulation speed.** The user doubted
+them, and the data agrees: Sonic Adventure 2 logged 22 fps while the in-game clock gave 85%
+(≈51 fps). The log counts frames RetroArch *presents*. Frameskip hides skipped frames, games that are
+natively 30 fps (common on PSP) present half as many, and whether PPSSPP's "duplicate frames to
+60 Hz" duplicates are counted is unverified. So the "19 fps = 32%", "37 fps = 62%" and "51–53 fps =
+85–88%" conversions above are **invalid as speed figures**. They are only comparable run to run
+under identical settings. The only trustworthy speed data this session is the user's
+stopwatch-on-the-game-clock.
+
+**Audio speed meter (RetroArch patch 0007).** `RETROARCH_LOG_SPEED=1` (now set in the wrapper) logs
+every ~5 s:
+
+    [Audio]: Speed: 100.0% (core audio 5.02 s in 5.02 s wall)
+
+This is the core's audio frames ÷ its nominal sample rate ÷ wall time, counted in
+`audio_driver_sample()` and `audio_driver_sample_batch()`. Emulated time is what the audio tracks,
+so frameskip and duplicated frames do not affect it. Windows with the menu open, or with a core that
+produces no audio, read low. Validation on NES (known full speed): 103.1% (startup buffer fill),
+then **100.0%, 100.6%**. Generation notes: the file includes no `<stdlib.h>`, so the patch adds it
+for `getenv()`; GCC 14 would reject an implicit declaration. The `\n` in the format string was
+checked in the generated patch, given this project's backslash history.
+
+**PSP after the overclock:** the user reports **Assassin's Creed Bloodlines now playable**, with
+PPSSPP's defaults auto frameskip @ 2 and the GPU at 600 MHz (texture filtering Linear). Earlier it
+was 19 fps / ~32% speed with no frameskip at 432 MHz, the worst title tested. Reported by eye, not
+measured. The FPS log cannot measure it with frameskip on, so the stopwatch method is the one to use.
+
 - Build note: every `make` now spends ~1 min in Buildroot's `setlocalversion`, which runs `git
   update-index --refresh` in the BR2_EXTERNAL tree. Since the project became a git repo that tree is
   a git work tree on `/mnt/c` (9P), where every stat is slow. Harmless, just slow.

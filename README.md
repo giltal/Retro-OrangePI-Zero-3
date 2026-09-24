@@ -12,9 +12,10 @@ panel), which was itself a port of the LyraZeroW SuperRetroPack.
 
 > **Status: working.** Boots to the launcher on HDMI 720p. NES, PlayStation and
 > Nintendo 64 run smoothly on the GPU (RetroArch reports `Mali-G31 MC1 (Panfrost)`,
-> OpenGL ES 3.1), with HDMI audio and a DualShock 3. PSP and Dreamcast are built
-> and load on the board, but have not been played yet. The remaining systems are
-> built but not individually tested. See `DevelopmentLog.md`.
+> OpenGL ES 3.1), with HDMI audio and a DualShock 3. PSP is playable, including
+> heavy titles like Assassin's Creed Bloodlines (with auto frameskip). Dreamcast runs
+> at 91-95% speed in Sonic Adventure 2. The GPU runs at up to 600 MHz. The remaining
+> systems are built but not individually tested. See `DevelopmentLog.md`.
 
 ---
 

@@ -23,7 +23,8 @@ ppsspp_texture_anisotropic_filtering = "disabled"
 # A53 core, and mid-weight 3D games do not hold 60 without it. Tested on
 # LittleBigPlanet: "feels playable" with this, slow motion without it.
 # Auto means it only skips when the game falls behind, so lighter games are
-# unaffected. Assassin's Creed Bloodlines remains too slow either way.
+# unaffected. With this plus the GPU at 600 MHz (kernel patch 0050), even
+# Assassin's Creed Bloodlines (~32% speed before either) is reported playable.
 #
 # NOTE for measurement: with frameskip on, RetroArch's FPS log counts
 # RENDERED frames, not game speed, so it under-reads. Measure speed with

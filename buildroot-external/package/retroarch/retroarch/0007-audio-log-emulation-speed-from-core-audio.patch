@@ -1,0 +1,93 @@
+From: RetroOPI_Z3
+Subject: [PATCH] audio: log emulation speed from core audio output
+
+Set RETROARCH_LOG_SPEED to log, every ~5 s, how much emulated time the
+core's audio covered per second of wall time -- the emulation speed,
+independent of frameskip and frame duplication. See the comment on
+audio_driver_log_speed().
+
+---
+--- a/audio/audio_driver.c	2026-09-24 12:18:50.616640637 +0300
++++ b/audio/audio_driver.c	2026-09-24 12:18:50.628569461 +0300
+@@ -17,6 +17,7 @@
+  *  with RetroArch. If not, see <http://www.gnu.org/licenses/>.
+  **/
+ 
++#include <stdlib.h> /* getenv(): RetroOPI speed log */
+ #include <math.h>
+ 
+ #include "audio_driver.h"
+@@ -809,6 +810,56 @@
+    return audio_driver_deinit();
+ }
+ 
++/*
++ * Emulation speed from core audio (RetroOPI_Z3).
++ *
++ * A core produces audio at exactly the rate of EMULATED time, so
++ * (audio frames the core delivered / its nominal sample rate) / wall time
++ * is the emulation speed. That is independent of frameskip, duplicated
++ * frames and the game's own frame rate, all of which make the FPS log
++ * (patch 0001) misleading as a speed measure. Measured on the board:
++ * frameskip made the FPS log read 22 while the game clock ran at 85%.
++ *
++ * Enabled by RETROARCH_LOG_SPEED in the environment. One line per ~5 s:
++ *   [Audio]: Speed:  98.7% (core audio 4.94 s in 5.00 s wall)
++ * A window during which the menu was open or the core produced no audio
++ * reads low; ignore those.
++ */
++static void audio_driver_log_speed(size_t frames)
++{
++   static int      enabled = -1;
++   static retro_time_t t0;
++   static uint64_t acc;
++   static unsigned since_check;
++   retro_time_t    now;
++
++   if (enabled < 0)
++   {
++      enabled = getenv("RETROARCH_LOG_SPEED") != NULL;
++      t0      = cpu_features_get_time_usec();
++   }
++   if (!enabled)
++      return;
++
++   acc         += frames;
++   since_check += (unsigned)frames;
++   if (since_check < 1024)      /* read the clock ~every 20 ms, not per sample */
++      return;
++   since_check = 0;
++
++   now = cpu_features_get_time_usec();
++   if (now - t0 >= 5000000)
++   {
++      double rate = video_state_get_ptr()->av_info.timing.sample_rate;
++      double wall = (double)(now - t0) / 1000000.0;
++      if (rate > 0.0)
++         RARCH_LOG("[Audio]: Speed: %5.1f%% (core audio %.2f s in %.2f s wall)\n",
++               100.0 * (double)acc / rate / wall, (double)acc / rate, wall);
++      acc = 0;
++      t0  = now;
++   }
++}
++
+ void audio_driver_sample(int16_t left, int16_t right)
+ {
+    uint32_t runloop_flags;
+@@ -816,6 +867,7 @@
+    recording_state_t *recording_st = NULL;
+    if (audio_st->flags & AUDIO_FLAG_SUSPENDED)
+       return;
++   audio_driver_log_speed(1);
+    audio_st->output_samples_conv_buf[audio_st->data_ptr++] = left;
+    audio_st->output_samples_conv_buf[audio_st->data_ptr++] = right;
+ 
+@@ -861,6 +913,8 @@
+    if ((audio_st->flags & AUDIO_FLAG_SUSPENDED) || (frames < 1))
+       return frames;
+ 
++   audio_driver_log_speed(frames);
++
+    runloop_flags                   = runloop_get_flags();
+ 
+    /* We want to run this loop at least once, so use a
