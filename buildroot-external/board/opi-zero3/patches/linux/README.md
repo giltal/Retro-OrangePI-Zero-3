@@ -33,7 +33,7 @@ Our own, on top of Armbian's set:
 
 | Ours | What for |
 |---|---|
-| 0050 | **GPU OPP table**: 432 MHz @ 900 mV and 600 MHz @ 960 mV, from Orange Pi's BSP (`linux-orangepi`, `orange-pi-6.1-sun50iw9`, `sun50i-h616.dtsi`). Without it the Mali-G31 ran fixed at 432 MHz. 800 MHz @ 1080 mV is left out, because it exceeds the board's 990 mV dcdc1 limit. Measured on Sonic Adventure 2 (Dreamcast, GPU-bound): 11.8 s → 10.5–11 s per 10 game-seconds, 600 MHz for 51 of 60 s in play, rail at 960 mV, peak GPU 60 °C, no panfrost faults. |
+| 0050 | **GPU OPP table**: 432 MHz @ 900 mV and 600 MHz @ 960 mV, from Orange Pi's BSP (`linux-orangepi`, `orange-pi-6.1-sun50iw9`, `sun50i-h616.dtsi`). Without it the Mali-G31 ran fixed at 432 MHz. 800 MHz @ 1080 mV is left out, because it exceeds the board's 990 mV dcdc1 limit. Measured with the audio speed meter, same spot in Sonic Adventure 2, clock locked A/B: 432 MHz 75.5%, 600 MHz 77.8%. A small but real gain; the game is mostly CPU-bound. (An earlier "85% → 91–95%" claim compared stopwatch runs at different spots and is withdrawn.) In play it reaches 600 MHz under load, the rail sits at 960 mV, peak GPU is 60 °C, no panfrost faults. |
 
 Deliberately **not** taken:
 
