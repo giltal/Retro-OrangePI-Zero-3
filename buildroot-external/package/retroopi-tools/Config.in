@@ -7,3 +7,7 @@ config BR2_PACKAGE_RETROOPI_TOOLS
 	  launcher and RetroArch can be driven from a shell over SSH. Injected
 	  events travel the same evdev/udev path a real gamepad's do. Requires
 	  CONFIG_INPUT_UINPUT.
+
+	  core-info -- load a libretro core and print its library_name,
+	  extensions and every core option with its allowed values, so .opt
+	  files can be written from what the core really accepts.

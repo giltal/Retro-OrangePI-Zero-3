@@ -12,8 +12,9 @@ panel), which was itself a port of the LyraZeroW SuperRetroPack.
 
 > **Status: working.** Boots to the launcher on HDMI 720p. NES, PlayStation and
 > Nintendo 64 run smoothly on the GPU (RetroArch reports `Mali-G31 MC1 (Panfrost)`,
-> OpenGL ES 3.1), with HDMI audio and a DualShock 3. The remaining systems are
-> built but not individually tested yet. See `DevelopmentLog.md`.
+> OpenGL ES 3.1), with HDMI audio and a DualShock 3. PSP and Dreamcast are built
+> and load on the board, but have not been played yet. The remaining systems are
+> built but not individually tested. See `DevelopmentLog.md`.
 
 ---
 
@@ -21,7 +22,7 @@ panel), which was itself a port of the LyraZeroW SuperRetroPack.
 
 | | |
 |---|---|
-| **Systems** | NES, SNES, Game Boy / Color / Advance, Genesis, Master System, Game Gear, PC Engine, SuperGrafx, Atari 2600 / 7800 / 800 / 5200, ZX Spectrum, Neo Geo / CPS / arcade, Doom, PlayStation, Nintendo 64 |
+| **Systems** | NES, SNES, Game Boy / Color / Advance, Genesis, Master System, Game Gear, PC Engine, SuperGrafx, Atari 2600 / 7800 / 800 / 5200, ZX Spectrum, Neo Geo / CPS / arcade, Doom, PlayStation, Nintendo 64, **PSP** (PPSSPP), **Dreamcast** (Flycast) |
 | **Display** | HDMI 1280×720 (1080p planned). The launcher picks the matching TV mode and scales its layout to it |
 | **GPU** | Mali-G31 via Mesa panfrost, GLES 3.1. RetroArch `gl` driver on KMS/GBM |
 | **Input** | DualShock 3, wired, or over Bluetooth via a USB dongle |

@@ -29,6 +29,12 @@ verified to apply cleanly, in that order, to a pristine linux-6.18.53.
 | 0048 | `drv-nvmem-sunxi-add-h616-support` | SID/efuse, used for the CPU speed bin and thermal calibration |
 | 0049 | `drv-soc-sunxi-sram-add-h616-sram-c1` | SRAM C1 claim for the video engine |
 
+Our own, on top of Armbian's set:
+
+| Ours | What for |
+|---|---|
+| 0050 | **GPU OPP table**: 432 MHz @ 900 mV and 600 MHz @ 960 mV, from Orange Pi's BSP (`linux-orangepi`, `orange-pi-6.1-sun50iw9`, `sun50i-h616.dtsi`). Without it the Mali-G31 ran fixed at 432 MHz. 800 MHz @ 1080 mV is left out, because it exceeds the board's 990 mV dcdc1 limit. Measured on Sonic Adventure 2 (Dreamcast, GPU-bound): 11.8 s → 10.5–11 s per 10 game-seconds, 600 MHz for 51 of 60 s in play, rail at 960 mV, peak GPU 60 °C, no panfrost faults. |
+
 Deliberately **not** taken:
 
 - `fixes-6.18/0014` fixes an out-of-tree megous patch we don't carry, and does not apply.

@@ -290,6 +290,15 @@ static const SystemDef g_systems[] = {
      * either way -- it is here to be measured, not because it is known good.
      */
     { "n64",           "paralleln64_libretro.so",         "Nintendo 64",       "n64,v64,z64,ndd" },
+    /*
+     * New on the Zero3: both need GLES3, which the Mali-G31 has and the
+     * reference's Mali-400 did not. PPSSPP's assets live in
+     * _system/bios/PPSSPP (copied there by S46ppsspp). Dreamcast games are
+     * .chd/.cdi files, or a GDI set in its own subfolder -- see
+     * find_disc_in_dir().
+     */
+    { "psp",           "ppsspp_libretro.so",              "PlayStation Portable", "iso,cso,chd,pbp,elf" },
+    { "dreamcast",     "flycast_libretro.so",             "Dreamcast",         "chd,cdi,gdi,cue,m3u" },
     { NULL, NULL, NULL, NULL }
 };
 
@@ -669,6 +678,31 @@ static TTF_Font *g_font_header = NULL;
 static TTF_Font *g_font_small  = NULL;
 static TTF_Font *g_font_jump   = NULL;  /* letter-jump overlay */
 
+/*
+ * Symbol fallback fonts, one per size above.
+ *
+ * launcher.ttf has no symbols at all -- none of the gear, star, clock,
+ * arrow or button glyphs the UI uses -- so every one of them rendered as
+ * the font's "missing glyph" box, a square with an X in it. DejaVu Sans
+ * (Buildroot's dejavu package) covers all of them, so gfx_draw_text() renders
+ * any codepoint the main font lacks from here instead. Optional: without
+ * the file the launcher still runs, with the boxes back.
+ */
+#define SYMBOL_FONT_PATH "/usr/share/fonts/dejavu/DejaVuSans.ttf"
+static TTF_Font *g_sym_list   = NULL;
+static TTF_Font *g_sym_header = NULL;
+static TTF_Font *g_sym_small  = NULL;
+static TTF_Font *g_sym_jump   = NULL;
+
+static TTF_Font *gfx_symbol_font_for(TTF_Font *font)
+{
+    if (font == g_font_list)   return g_sym_list;
+    if (font == g_font_header) return g_sym_header;
+    if (font == g_font_small)  return g_sym_small;
+    if (font == g_font_jump)   return g_sym_jump;
+    return NULL;
+}
+
 static int gfx_init(void)
 {
     if (TTF_Init() < 0) {
@@ -688,6 +722,14 @@ static int gfx_init(void)
         return -1;
     }
 
+    g_sym_list   = TTF_OpenFont(SYMBOL_FONT_PATH, FONT_SIZE_LIST);
+    g_sym_header = TTF_OpenFont(SYMBOL_FONT_PATH, FONT_SIZE_HEADER);
+    g_sym_small  = TTF_OpenFont(SYMBOL_FONT_PATH, FONT_SIZE_SMALL);
+    g_sym_jump   = TTF_OpenFont(SYMBOL_FONT_PATH, FONT_SIZE_JUMP);
+    if (!g_sym_list)
+        fprintf(stderr, "GFX: no symbol font %s -- UI symbols will show as boxes\n",
+                SYMBOL_FONT_PATH);
+
     int img_flags = IMG_INIT_PNG;
     if (!(IMG_Init(img_flags) & img_flags)) {
         fprintf(stderr, "GFX: IMG_Init failed: %s\n", IMG_GetError());
@@ -700,6 +742,11 @@ static int gfx_init(void)
 
 static void gfx_cleanup(void)
 {
+    if (g_sym_jump)    TTF_CloseFont(g_sym_jump);
+    if (g_sym_small)   TTF_CloseFont(g_sym_small);
+    if (g_sym_header)  TTF_CloseFont(g_sym_header);
+    if (g_sym_list)    TTF_CloseFont(g_sym_list);
+    g_sym_list = g_sym_header = g_sym_small = g_sym_jump = NULL;
     if (g_font_jump)   TTF_CloseFont(g_font_jump);
     if (g_font_small)  TTF_CloseFont(g_font_small);
     if (g_font_header) TTF_CloseFont(g_font_header);
@@ -790,16 +837,10 @@ static void gfx_blit_surface(SDL_Surface *surf, int dst_x, int dst_y)
 }
 
 /* Render text and blit to framebuffer. Returns rendered width. */
-static int gfx_draw_text(TTF_Font *font, const char *text, int x, int y,
-                          pixel_t color, int max_width)
+/* Render one run of text with one font, clipped to max_width (0 = no limit). */
+static int gfx_draw_text_run(TTF_Font *font, const char *text, int x, int y,
+                             SDL_Color sdl_color, int max_width)
 {
-    if (!text || !text[0]) return 0;
-    SDL_Color sdl_color = {
-        (color >> 16) & 0xFF,
-        (color >> 8)  & 0xFF,
-        (color)       & 0xFF,
-        255
-    };
     SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, sdl_color);
     if (!surf) return 0;
 
@@ -819,6 +860,79 @@ static int gfx_draw_text(TTF_Font *font, const char *text, int x, int y,
     gfx_blit_surface(surf, x, y);
     SDL_FreeSurface(surf);
     return w;
+}
+
+/* Decode one UTF-8 codepoint at s; returns its length in bytes (>= 1). */
+static int utf8_next(const char *s, Uint32 *cp)
+{
+    const unsigned char *u = (const unsigned char *)s;
+    if (u[0] < 0x80) { *cp = u[0]; return 1; }
+    if ((u[0] & 0xE0) == 0xC0 && u[1]) {
+        *cp = ((u[0] & 0x1F) << 6) | (u[1] & 0x3F); return 2;
+    }
+    if ((u[0] & 0xF0) == 0xE0 && u[1] && u[2]) {
+        *cp = ((u[0] & 0x0F) << 12) | ((u[1] & 0x3F) << 6) | (u[2] & 0x3F); return 3;
+    }
+    if ((u[0] & 0xF8) == 0xF0 && u[1] && u[2] && u[3]) {
+        *cp = ((u[0] & 0x07) << 18) | ((u[1] & 0x3F) << 12) |
+              ((u[2] & 0x3F) << 6) | (u[3] & 0x3F); return 4;
+    }
+    *cp = 0xFFFD; return 1;     /* malformed: consume one byte */
+}
+
+/*
+ * Draw text, taking any glyph the main font lacks from the symbol font.
+ *
+ * The string is split into runs of "main font has it" and "it does not", and
+ * each run is rendered with its own font. Runs are aligned on a common
+ * baseline: the fonts have different ascents, so a plain same-y blit would
+ * put the symbols visibly high or low.
+ */
+static int gfx_draw_text(TTF_Font *font, const char *text, int x, int y,
+                          pixel_t color, int max_width)
+{
+    if (!text || !text[0]) return 0;
+    SDL_Color sdl_color = {
+        (color >> 16) & 0xFF,
+        (color >> 8)  & 0xFF,
+        (color)       & 0xFF,
+        255
+    };
+
+    /* Fast path: pure ASCII, or no symbol font -- one run, as before. */
+    TTF_Font *sym = gfx_symbol_font_for(font);
+    const char *p = text;
+    while (*p && !(*p & 0x80)) p++;
+    if (!*p || !sym)
+        return gfx_draw_text_run(font, text, x, y, sdl_color, max_width);
+
+    char run[MAX_NAME];
+    int drawn = 0;
+    const int asc = TTF_FontAscent(font);
+
+    p = text;
+    while (*p) {
+        /* Collect a run of codepoints that all want the same font. */
+        Uint32 cp;
+        int n = utf8_next(p, &cp);
+        TTF_Font *rf = (cp < 0x80 || TTF_GlyphIsProvided32(font, cp)) ? font : sym;
+        size_t len = 0;
+        while (*p) {
+            n = utf8_next(p, &cp);
+            TTF_Font *f = (cp < 0x80 || TTF_GlyphIsProvided32(font, cp)) ? font : sym;
+            if (f != rf || len + n >= sizeof(run)) break;
+            memcpy(run + len, p, n);
+            len += n;
+            p += n;
+        }
+        run[len] = 0;
+
+        int room = max_width > 0 ? max_width - drawn : 0;
+        if (max_width > 0 && room <= 0) break;
+        int dy = asc - TTF_FontAscent(rf);
+        drawn += gfx_draw_text_run(rf, run, x + drawn, y + dy, sdl_color, room);
+    }
+    return drawn;
 }
 
 /* Draw text centered horizontally */
@@ -1347,7 +1461,9 @@ static void menu_scan_systems(void)
     }
     if (g_recents_count > 0) {
         MenuEntry *e = &g_menu.entries[g_menu.count++];
-        snprintf(e->name, MAX_NAME, "\xe2\x8f\xb1  Recently Played (%d)", g_recents_count);
+        /* U+25F7 (clock face), not U+23F1 (stopwatch): DejaVu Sans, the
+         * symbol fallback, has no stopwatch, so that one stayed a box. */
+        snprintf(e->name, MAX_NAME, "\xe2\x97\xb7  Recently Played (%d)", g_recents_count);
         e->path[0] = '\0';
         e->system_idx = -102; /* Sentinel: recents */
         e->rom_count = g_recents_count;
@@ -1377,21 +1493,14 @@ static void menu_scan_systems(void)
         }
         if (sys_idx < 0) continue;
 
-        /* Check that the directory has at least one file */
+        /* Hide systems with no games. Uses count_roms_in_dir(), the same
+         * definition of "a game" the ROM list uses, so a game FOLDER (a
+         * Dreamcast GDI set) counts too. The check used to be its own loop
+         * over plain files only, which hid a Dreamcast folder whose only
+         * game was in a subfolder. */
         char syspath[MAX_NAME];
         snprintf(syspath, sizeof(syspath), "%s/%s", ROMS_PATH, de->d_name);
-        DIR *sd = opendir(syspath);
-        if (!sd) continue;
-        int has_files = 0;
-        struct dirent *sde;
-        while ((sde = readdir(sd)) != NULL) {
-            if (sde->d_name[0] != '.' && sde->d_type != DT_DIR) {
-                has_files = 1;
-                break;
-            }
-        }
-        closedir(sd);
-        if (!has_files) continue;
+        if (count_roms_in_dir(syspath) == 0) continue;
 
         /* Check that the core exists */
         char corepath[MAX_NAME];
@@ -1452,6 +1561,44 @@ static void menu_remember_rom(void)
     g_last_rom[sys][MAX_NAME - 1] = '\0';
 }
 
+/*
+ * A game can also be a FOLDER holding a multi-file disc image. GDI dumps (the
+ * usual Dreamcast format) have to be laid out this way: every GDI game names
+ * its tracks track01.bin, track02.raw, ... so two games can never share a
+ * folder. Multi-disc PSX sets (.m3u + .cue/.bin per disc) are the same idea.
+ *
+ * Returns the file inside `dir` that should be launched, picking the most
+ * specific descriptor present: m3u (a playlist of discs) > gdi > cue > chd >
+ * cdi. Only one level deep. Returns 0 if the folder holds none of them.
+ */
+static int find_disc_in_dir(const char *dir, char *out, size_t outlen)
+{
+    static const char *prefer[] = { ".m3u", ".gdi", ".cue", ".chd", ".cdi" };
+    char best[MAX_NAME] = "";
+    int best_rank = (int)(sizeof(prefer) / sizeof(prefer[0]));
+
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        const char *dot = strrchr(de->d_name, '.');
+        if (!dot) continue;
+        for (int r = 0; r < best_rank; r++) {
+            if (strcasecmp(dot, prefer[r]) == 0) {
+                best_rank = r;
+                strncpy(best, de->d_name, sizeof(best) - 1);
+                best[sizeof(best) - 1] = '\0';
+                break;
+            }
+        }
+    }
+    closedir(d);
+    if (!best[0]) return 0;
+    snprintf(out, outlen, "%s/%s", dir, best);
+    return 1;
+}
+
 static void menu_scan_roms(int system_entry_idx)
 {
     /* Save system info before overwriting entries */
@@ -1479,7 +1626,26 @@ static void menu_scan_roms(int system_entry_idx)
     struct dirent *de;
     while ((de = readdir(d)) != NULL && g_menu.count < MAX_ENTRIES) {
         if (de->d_name[0] == '.') continue;
-        if (de->d_type == DT_DIR) continue; /* Skip subdirectories for now */
+        if (de->d_type == DT_DIR) {
+            /* A folder is a game if it holds a disc descriptor; listed
+             * under the folder's name. See find_disc_in_dir(). */
+            char sub[MAX_NAME], disc[MAX_NAME];
+            snprintf(sub, sizeof(sub), "%s/%s", sys_path, de->d_name);
+            if (!find_disc_in_dir(sub, disc, sizeof(disc)))
+                continue;
+            MenuEntry *e = &g_menu.entries[g_menu.count++];
+            const char *fullname = gamenames_lookup(de->d_name);
+            if (fullname)
+                strncpy(e->name, fullname, MAX_NAME - 1);
+            else
+                clean_display_name(de->d_name, e->name, MAX_NAME);
+            strncpy(e->path, disc, MAX_NAME - 1);
+            e->path[MAX_NAME - 1] = '\0';
+            e->system_idx = sys_idx;
+            e->rom_count = 0;
+            e->is_favorite = favorites_contains(e->path);
+            continue;
+        }
         if (strcmp(de->d_name, "gamenames.txt") == 0) continue;
 
         MenuEntry *e = &g_menu.entries[g_menu.count++];
@@ -1514,6 +1680,30 @@ static void menu_scan_roms(int system_entry_idx)
                 i--; /* Re-check this index */
                 break;
             }
+        }
+    }
+
+    /* A flat folder holding a .gdi: its .bin/.raw files are that disc's
+     * tracks, not games. (Only one GDI set can live in a folder, because the
+     * track names collide; more than one needs a subfolder each.) PSX folders
+     * never contain a .gdi, so their standalone .bin games are unaffected. */
+    bool has_gdi = false;
+    for (int i = 0; i < g_menu.count && !has_gdi; i++) {
+        const char *dot = strrchr(g_menu.entries[i].path, '.');
+        has_gdi = dot && strcasecmp(dot, ".gdi") == 0 &&
+                  strncmp(g_menu.entries[i].path, sys_path, strlen(sys_path)) == 0 &&
+                  !strchr(g_menu.entries[i].path + strlen(sys_path) + 1, '/');
+    }
+    for (int i = 0; has_gdi && i < g_menu.count; i++) {
+        const char *p = g_menu.entries[i].path;
+        const char *dot = strrchr(p, '.');
+        if (strchr(p + strlen(sys_path) + 1, '/'))
+            continue;           /* entries from subfolders are never tracks */
+        if (dot && (strcasecmp(dot, ".bin") == 0 || strcasecmp(dot, ".raw") == 0)) {
+            memmove(&g_menu.entries[i], &g_menu.entries[i + 1],
+                    (g_menu.count - i - 1) * sizeof(MenuEntry));
+            g_menu.count--;
+            i--;
         }
     }
 
@@ -1868,8 +2058,18 @@ static int count_roms_in_dir(const char *dir_path)
     int count = 0;
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
-        if (de->d_name[0] != '.' && de->d_type != DT_DIR)
+        if (de->d_name[0] == '.') continue;
+        if (de->d_type != DT_DIR) {
             count++;
+        } else {
+            /* A game folder (e.g. a Dreamcast GDI set) counts as one game,
+             * matching what menu_scan_roms() lists. Without this, a system
+             * whose games are all in folders counted 0 and was hidden. */
+            char sub[MAX_NAME], disc[MAX_NAME];
+            snprintf(sub, sizeof(sub), "%s/%s", dir_path, de->d_name);
+            if (find_disc_in_dir(sub, disc, sizeof(disc)))
+                count++;
+        }
     }
     closedir(d);
     return count;
@@ -2012,8 +2212,9 @@ static void volume_apply(int pct)
     char cmd[128];
     snprintf(cmd, sizeof(cmd),
              "amixer -q cset name=" VOL_CONTROL " %d >/dev/null 2>&1", pct);
-    if (system(cmd) == -1)
-        ;
+    if (system(cmd) == -1) {
+        /* best effort: a failed amixer leaves the level where it was */
+    }
 }
 
 /*
@@ -2066,8 +2267,9 @@ static int n64_hires_get(void)
 static void n64_hires_set(int on)
 {
     if (system(on ? "/usr/sbin/n64-hires on >/dev/null 2>&1"
-                  : "/usr/sbin/n64-hires off >/dev/null 2>&1") == -1)
-        ;
+                  : "/usr/sbin/n64-hires off >/dev/null 2>&1") == -1) {
+        /* best effort: the Settings value is re-read from the .opt anyway */
+    }
 }
 
 static void menu_load_settings(void)
@@ -2097,9 +2299,9 @@ static void ui_draw_header(const char *title)
     gfx_fill_rect(0, 0, SCREEN_WIDTH, HEADER_HEIGHT, COL_HEADER_BG);
 
     if (g_menu.mode == MENU_SYSTEMS) {
-        gfx_draw_text(g_font_header, "LYRA", PADDING_X, UI_SCALE(8), COL_SYSTEM_ICON, 0);
+        gfx_draw_text(g_font_header, "RETRO", PADDING_X, UI_SCALE(8), COL_SYSTEM_ICON, 0);
         int w = 0;
-        TTF_SizeUTF8(g_font_header, "LYRA", &w, NULL);
+        TTF_SizeUTF8(g_font_header, "RETRO", &w, NULL);
         gfx_draw_text(g_font_header, " LAUNCHER", PADDING_X + w, UI_SCALE(8), COL_TEXT, 0);
     } else if (g_menu.mode == MENU_SETTINGS) {
         gfx_draw_text(g_font_header, "\xe2\x97\x80", PADDING_X, UI_SCALE(8), COL_TEXT_DIM, 0);
@@ -2356,6 +2558,14 @@ static const char *core_display_name(const char *core_file)
         { "prboom_libretro.so",           "PrBoom" },
         { "fbalpha2012_libretro.so",      "FB Alpha 2012" },
         { "mame2003plus_libretro.so",     "MAME 2003-Plus" },
+        /* Missing until now, so the save-state slot picker never appeared
+         * for PSX, N64 or GBA. Names are each core's library_name, which is
+         * what RetroArch uses for the per-core state directory. */
+        { "pcsx_rearmed_libretro.so",     "PCSX-ReARMed" },
+        { "paralleln64_libretro.so",      "ParaLLEl N64" },
+        { "gpsp_libretro.so",             "gpSP" },
+        { "ppsspp_libretro.so",           "PPSSPP" },
+        { "flycast_libretro.so",          "Flycast" },
         { NULL, NULL }
     };
     for (int i = 0; map[i].so; i++) {

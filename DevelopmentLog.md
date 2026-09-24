@@ -377,6 +377,177 @@ waits for a clock that never comes. **Fix:** `stop` now only releases the DHCP l
 and stops the clients, leaving eth0 up. Two warm reboots: back after 21 s and 19 s, link up at ~8.4 s,
 same lease.
 
+### Launcher visuals: name and symbols
+
+- Header "LYRA LAUNCHER" → **"RETRO LAUNCHER"**.
+- Every UI symbol (⚙ ★ ⏱ ◀ △ □ ✕) rendered as a "missing glyph" box: `launcher.ttf` has **none** of
+  them. This was checked by parsing its `cmap` directly with stdlib Python (no fontTools in WSL), and the
+  same check showed DejaVu Sans covers all of them except U+23F1 ⏱. Fix: `BR2_PACKAGE_DEJAVU`
+  (sans only) plus a per-glyph fallback in `gfx_draw_text()`. The text is split into runs by
+  `TTF_GlyphIsProvided32()`, and each run is rendered with its own font and aligned on a common
+  baseline via `TTF_FontAscent()`. Recently Played uses ◷ (U+25F7) instead of ⏱. A post-build guard
+  checks the font file is present. Also: two `-Wempty-body` warnings (`if (system(...) == -1) ;`) fixed.
+- An inline-Python edit of the launcher tripped the backslash trap again (`\\x` → `\x` inside the
+  heredoc). The match-count assertion caught it and nothing was written. Done with the Edit tool.
+
+### PSP (PPSSPP) and Dreamcast (Flycast), overnight
+
+The user asked what else this SoC can run. The H618 is essentially the H700 of the Anbernic RG35XX
+handhelds (4×A53 1.5 GHz + Mali-G31 MP2), where PSP is playable for many games at 1× and Dreamcast
+often runs at full speed. Both need GLES3, which the reference's Mali-400 lacked.
+
+- **RetroArch was built with `HAVE_OPENGLES3=no`**, so any core requesting a GLES3 context would
+  fail. Added `--enable-opengles3 --enable-opengles3_1` when panfrost is enabled.
+- **PPSSPP**: the old package pinned a 2018 commit of the libretro fork with Rockchip patches. It was
+  replaced by upstream **v1.20.4** (git + submodules; the bundled FFmpeg has `linux/aarch64`
+  prebuilts). With `-DLIBRETRO=ON -DUSING_GLES2=ON`, the libretro port skips the GL-core path and uses
+  RetroArch's GLES3 context (`LibretroGraphicsContext.cpp`). The assets go to
+  `/usr/share/ppsspp/PPSSPP` in the rootfs.
+- **Flycast**: new package, **v2.7**, `-DLIBRETRO=ON -DUSE_GLES=ON`, no Vulkan, no OpenMP (no
+  libgomp in our toolchain). The ARM64 dynarec (vixl) is selected from the architecture.
+- **S46card** (new): brings an existing card up to date, strictly additively. It creates the missing
+  `psp`, `dreamcast` and `_system/bios/dc` folders, and copies the PPSSPP assets into
+  `_system/bios/PPSSPP` when a version stamp differs (backgrounded; never deletes anything, since
+  PSP saves live in the same tree).
+- **Launcher**: `psp` and `dreamcast` systems. **Subfolder games**: a folder holding a disc
+  descriptor (m3u > gdi > cue > chd > cdi) is listed as one game under the folder's name. GDI sets
+  *must* be laid out that way, because every GDI names its tracks track01.bin etc. In a flat folder
+  containing a `.gdi`, the `.bin`/`.raw` tracks are hidden. `count_roms_in_dir()` counts game folders
+  too, or a Dreamcast system holding only folders would be hidden as empty.
+- **Save-state picker**: `core_display_name()` had no entries for PSX, N64 or GBA, so the slot picker
+  never appeared for them. Added those plus PPSSPP and Flycast.
+- **First build, first try: RetroArch (HAVE_OPENGLES3=1, 3_1=1), Flycast (33 MB) and PPSSPP (30 MB),
+  all AArch64.** But built is not the same as working:
+- **New tool, `tools/core-info`**: dlopens a core ON THE BOARD and prints its `library_name`,
+  version, extensions and every core option with its values (via the legacy SET_VARIABLES path).
+  First run: **both new cores failed to dlopen**. PPSSPP needed `libcpu_features.so` and Flycast
+  needed `nowide.so.11.3.0`. Buildroot's cmake-package passes `BUILD_SHARED_LIBS=ON`, so vendored
+  sub-libraries were built as `.so` files that are never installed. Fixed with
+  `-DBUILD_SHARED_LIBS=OFF` in both. **New post-build guard:** every `NEEDED` entry of every core
+  must exist in the target. It was tested against the broken target and fails as it should. In a
+  game this would only have shown as "returns to the launcher".
+- The same run confirmed the library_names for the new save-state entries: `gpSP`, `PCSX-ReARMed`,
+  `ParaLLEl N64`.
+- **Stale launcher, caught:** a full build shipped the OLD launcher binary, without the PSP/Dreamcast
+  entries. `SITE_METHOD=local` packages are not re-synced on a plain `make` (a reference lesson,
+  hit again). `build.sh` now dircleans `retroopi-launcher` and `retroopi-tools` before every full
+  build. A post-build guard checks that every system folder in post-image.sh's `SYSTEMS` is present
+  as a string in the launcher *binary*. Its first version used `strings` without `-n 2` and missed
+  every folder name shorter than 4 characters (nes, gb, psp…); fixed.
+- **Rebuilt statically, redeployed, and `core-info` on the board: both load.** `library_name` is
+  `PPSSPP` (76 options) and `Flycast` (85 options). The version strings read `unknown` /
+  `v0.0.0`, because both take them from git metadata the Buildroot tarball lacks. Cosmetic.
+- **Core options** (`config/PPSSPP/PPSSPP.opt`, `config/Flycast/Flycast.opt`) were written ONLY from
+  keys and values the cores reported, and checked mechanically against that output. **Flycast's keys
+  are `reicast_*`**; guessed `flycast_*` keys would have been silently ignored. PPSSPP: JIT, 1x
+  (480x272), anisotropic off, frameskip off, X confirms. Flycast: 640x480, threaded rendering,
+  auto-skip "some", anisotropic off.
+- **Dreamcast BIOS:** `core/emulator.cpp` (v2.7) loads a game with the real BIOS if
+  `<system>/dc/dc_boot.bin` exists, and **falls back to HLE automatically** otherwise, so
+  `reicast_hle_bios` stays `disabled`.
+- On the board, `S46card` created `psp`, `dreamcast` and `_system/bios/dc` on the user's card and
+  installed the PPSSPP assets (20 MB, stamp `v1.20.4`). A second run was a no-op.
+- **Regression check:** NES on the GLES3 RetroArch at 1080p is fine (`kms`, Mali-G31, GLES 3.1),
+  and the launcher came back.
+- Package hash files were added for both (Buildroot-generated git tarballs), and Buildroot accepts
+  them.
+- **Not verified (needs the user and game files):** actually playing PSP and Dreamcast, meaning GLES3
+  context creation by the core, speed, audio and controls. No ROMs were downloaded.
+
+**Test plan for tomorrow:** put a PSP `.iso`/`.cso` in `psp\` and a Dreamcast `.chd`/`.cdi` in
+`dreamcast\` (or a GDI set in its own subfolder), restart the launcher, and check:
+1. both systems appear and list their games; a GDI folder appears as one game;
+2. the game starts, and `/tmp/retroarch_verbose.log` shows a GLES3 HW context;
+3. speed and audio, by ear first, then measured (the reference's audio-seconds / wall-seconds ratio);
+4. the controls: the DS3 analog stick on PSP, Dreamcast triggers;
+5. save states through the launcher's slot picker (new for PSX/N64/GBA/PSP/DC).
+
+### PSP first play: works, heavy 3D games are slow
+
+User tests: PSP games start and run on the GPU. Need for Speed Most Wanted and Assassin's Creed
+Bloodlines are "slow, not choppy", i.e. below real-time.
+
+**Measuring speed:** the RetroArch wrapper now exports `RETROARCH_LOG_FPS=1` (our patch 0001), which
+logs `[Video]: FPS: x/59.94` every 256 frames. PPSSPP always delivers 60 fps of game time (frame
+duplication), so FPS/60 is the emulation speed. Loading screens read *above* 60 (74-77 fps: no
+audio, so nothing paces them), so only gameplay samples count.
+
+**Assassin's Creed Bloodlines, gameplay, Skip Buffer Effects on:** 18.3 / 19.3 / 19.3 / 20.1 fps,
+**avg 19.2 = 32% speed**.
+
+Profile during that gameplay:
+- GPU (panfrost fdinfo, with `/sys/.../1800000.gpu/profiling` on only for the measurement):
+  fragment 57%, vertex/tiler 20%.
+- Threads: Main (RetroArch plus PPSSPP's GL command thread) 76%, EmuThread (the PSP CPU JIT) 38%.
+  No core and no engine is at 100%, so CPU and GPU are **taking turns**, not saturated.
+- `strace` on Main: in 2 s, **1,030 `PANFROST_SUBMIT`** (~27 GPU jobs per frame) and ~8,000
+  BO create/label/madvise ioctls, plus ~3,000 mmap/munmap in 5 s. Heavy per-frame driver overhead
+  and frequent flushes, each costing a tile store/reload on this tiler GPU.
+- **Mesa `glthread`:** `mesa_glthread=true` was in the process environment, but no glthread driver
+  thread appeared, so Mesa did not enable it in this EGL/GBM setup. **Inconclusive** (18.5 fps, noise).
+  Reverted.
+- Earlier, NFS MW before Skip Buffer Effects: GPU fragment 70.6%.
+
+Context: AC Bloodlines is among the heaviest PSP titles, and on H700 handhelds (same CPU/GPU class)
+it is generally considered unplayable. Open levers:
+1. **GPU clock.** It is fixed at 432 MHz, because the H616 DT has no GPU OPP table and so there is
+   no devfreq. Needs research into safe voltage/frequency pairs (BSP/Armbian) before trying, and
+   measurement afterwards (the reference's Mali-400 overclock bought nothing).
+2. Why glthread does not engage.
+3. Calibrate with lighter PSP games before judging the port.
+
+**LittleBigPlanet (mid-weight 3D).** First reading 51.2 fps (85%). Then a messy A/B, for two
+reasons found along the way:
+1. **Option changes made in RetroArch's menu did not reach `PPSSPP.opt`.** Exits were clean
+   (status 0), and other cores' .opt files are written normally, but no LBP session saved PPSSPP's
+   options. Unexplained, still open. Work-around for experiments: a per-game file
+   (`PPSSPP/psy-lbp.opt`), written **only while no game is running**. RetroArch rewrites that file
+   from its in-memory values on exit, which undid the first attempt.
+2. **Skip Buffer Effects gives LBP a black screen** at launch (twice).
+Controlled result, same level: Skip Buffer Effects off gives **37.5 fps without Lazy Texture Caching
+and 37.0 with it**, so lazy caching has no effect. Profile: single-thread bound on Main (strace: 0.04 s
+GPU wait against 0.66 s futex in 3 s; the rest is CPU in PPSSPP's GPU emulation and Mesa). The CPU is
+already at 1416 MHz, which is the top of this speed bin's cpufreq table.
+
+**Decision (user): Auto Frameskip @ 2 "feels playable"** for LBP (unlike AC Bloodlines), and it is now
+the PPSSPP default in the image. **Measurement caveat:** with frameskip on, the RetroArch FPS log
+counts *rendered* frames, not game time, so it under-reads real speed. Measure speed with frameskip
+off, or by audio.
+
+**Dreamcast system hidden with a GDI folder as its only game.** The user put *Sonic Adventure 2*
+as a GDI set in `dreamcast/Sonic Adventure 2/`. The files reached the card intact, but the launcher
+listed 17 systems, without Dreamcast. The system list had its **own** emptiness check, a loop over
+plain files that skipped directories. Last night's fix only covered `count_roms_in_dir()`, not this
+second copy of the same idea. It now calls `count_roms_in_dir()`, so there is one definition of
+"has a game". Deployed: 18 systems.
+
+### Dreamcast first play, and a GPU overclock that pays off
+
+Sonic Adventure 2 (GDI) boots on Flycast's HLE BIOS ("Did not load BIOS, using reios") and renders
+on the Mali-G31, GLES 3.1. **The user timed the in-game clock: 11.8 s of wall time per 10 s of game
+time = 85% speed**, with auto frame skip at "more". That is a better method than our FPS log, which
+under-reads whenever frames are skipped (the log said 22 fps). The profile showed it GPU-bound.
+
+**GPU OPP table (patch 0050).** No H616/H618 GPU OPPs exist in mainline or in Armbian. Orange Pi's
+own BSP (`orange-pi-6.1-sun50iw9`, `sun50i-h616.dtsi`) has 125/250/432 MHz @ 810 mV, 600 @ 960 mV,
+800 @ 1080 mV, but its `operating-points-v2` line is **commented out** there. On the Zero3 the
+GPU rail is dcdc1 "vdd-gpu-sys" (810–990 mV, shared), which ran at 900 mV. Our table: 432 @ 900 mV
+(never below the previous voltage) and 600 @ 960 mV. 800 MHz is out, since 1080 mV is above the
+rail's 990 mV. The patch was generated by diffing an edited copy of the build-tree DTS, read before
+building, and checked in the compiled DTB (0x19bfcc00 / 0x23c34600 Hz, 0xdbba0 / 0xea600 µV).
+
+Result, same spot: **10.5–11 s per 10 game-seconds = 91–95%** (from 85%). A 60 s watch in play:
+600 MHz for 51 of 60 samples (simple_ondemand drops to 432 in light scenes), rail at 960 mV,
+**peak GPU 60 °C** (57 before), **no panfrost faults**. Kept. Unlike the reference's Mali-400
+overclock (memory-bound, no gain), this workload is really GPU-bound.
+
+Still possible for Dreamcast: alpha sorting "per-strip (fast)" and 320x240 internal resolution,
+not tested yet.
+
+- Build note: every `make` now spends ~1 min in Buildroot's `setlocalversion`, which runs `git
+  update-index --refresh` in the BR2_EXTERNAL tree. Since the project became a git repo that tree is
+  a git work tree on `/mnt/c` (9P), where every stat is slow. Harmless, just slow.
+
 Tooling note: an inline Python edit of this log died on Windows' cp1252 default encoding (the
 `≤` above) **after** `open(p, 'w')` had already truncated the file to 0 bytes. It was restored from
 git, since all prior entries were committed. Use the Edit tool for these docs, or pass

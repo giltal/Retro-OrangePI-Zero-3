@@ -1,0 +1,53 @@
+From: RetroOPI_Z3
+Subject: [PATCH] arm64: dts: allwinner: orangepi-zero3: GPU OPP table, up to 600 MHz
+
+The Mali-G31 had no operating points, so it ran fixed at 432 MHz with no
+devfreq. Add 432 MHz @ 900 mV (the clock and voltage it already ran at)
+and 600 MHz @ 960 mV, from Orange Pi's BSP table; 800 MHz is left out
+because its 1080 mV exceeds the board's 990 mV dcdc1 limit.
+
+Measured motivation: Dreamcast (Flycast) on this board is GPU-bound.
+
+---
+--- a/arch/arm64/boot/dts/allwinner/sun50i-h618-orangepi-zero3.dts	2026-09-24 11:33:10.401060320 +0300
++++ b/arch/arm64/boot/dts/allwinner/sun50i-h618-orangepi-zero3.dts	2026-09-24 11:33:10.412465503 +0300
+@@ -29,6 +29,7 @@
+ 
+ &gpu {
+ 	mali-supply = <&reg_dcdc1>;
++	operating-points-v2 = <&gpu_opp_table>;
+ 	status = "okay";
+ };
+ 
+@@ -116,3 +117,31 @@
+ 	vcc-ph-supply = <&reg_dldo1>;
+ 	vcc-pi-supply = <&reg_dldo1>;
+ };
++
++/*
++ * GPU operating points (RetroOPI_Z3). Mainline and Armbian have none for the
++ * H616/H618, so the Mali-G31 ran fixed at 432 MHz with no devfreq at all.
++ *
++ * Values from Orange Pi's own BSP (linux-orangepi, orange-pi-6.1-sun50iw9,
++ * sun50i-h616.dtsi gpu_opp_table): 432 MHz @ 810 mV, 600 MHz @ 960 mV,
++ * 800 MHz @ 1080 mV. The 800 MHz point is left out: 1080 mV is above this
++ * board's dcdc1 maximum (990 mV), and dcdc1 is vdd-gpu-sys, which is shared.
++ * The 432 MHz point keeps today's 900 mV rather than the BSP's 810 mV, so
++ * nothing ever runs below the voltage it ran at before this patch.
++ * panfrost's simple_ondemand devfreq only moves to 600 MHz under load.
++ */
++/ {
++	gpu_opp_table: opp-table-gpu {
++		compatible = "operating-points-v2";
++
++		opp-432000000 {
++			opp-hz = /bits/ 64 <432000000>;
++			opp-microvolt = <900000>;
++		};
++
++		opp-600000000 {
++			opp-hz = /bits/ 64 <600000000>;
++			opp-microvolt = <960000>;
++		};
++	};
++};

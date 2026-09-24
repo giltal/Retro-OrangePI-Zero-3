@@ -44,6 +44,16 @@ fi
 #   JLEVEL=8 bash scripts/build.sh clang
 JLEVEL=${JLEVEL:-$(nproc)}
 
+# Our own packages (launcher/, tools/) are SITE_METHOD=local, and Buildroot
+# does NOT re-sync a local package's source on an ordinary `make`. Edited
+# sources then silently keep shipping the OLD binary. That happened: a full
+# build carried a launcher without the new PSP/Dreamcast entries, and it was
+# only caught by grepping the binary. They take seconds to build, so a full build
+# always cleans them first.
+if [ $# -eq 0 ]; then
+	make O="$OUT" retroopi-launcher-dirclean retroopi-tools-dirclean >/dev/null
+fi
+
 echo "build.sh: $(date '+%F %T') make ${*:-all} BR2_JLEVEL=$JLEVEL (log: $LOG)"
 start=$(date +%s)
 if make O="$OUT" BR2_JLEVEL="$JLEVEL" "$@" > "$LOG" 2>&1; then

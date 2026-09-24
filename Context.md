@@ -60,8 +60,9 @@ has connectors, a lesson from the reference, where lima did the same.
 2. **Measure, don't assume.** Carry over the reference's methods: vblank-counted fps, the
    audio-seconds against wall-seconds ratio, xrun counting. Check every setting inherited from the A33:
    vsync off (does DE33 async-flip?), `video_threaded`, the N64 screensize, audio latency.
-3. **Use the GPU.** Evaluate mupen64plus-next (GLES3) against parallel-n64. Evaluate hardware PSX
-   renderers. Shaders at 720p.
+3. **Use the GPU.** *Done so far:* PSP (PPSSPP v1.20.4) and Dreamcast (Flycast v2.7) on GLES3,
+   N64 at 640x480, 1080p output. Still open: mupen64plus-next against parallel-n64, hardware PSX
+   renderers, shaders, PicoDrive for Sega CD / 32X.
 4. **1080p.** Set `SCREEN_W/H=1920/1080` and `video_fullscreen_x/y`. Launcher layout scales by
    `UI_SCALE`. Measure the launcher's CPU blit cost at 2.25× the pixels.
 5. **Onboard Wi-Fi/BT** via Armbian's uwe5622 extension, so no dongle is needed.

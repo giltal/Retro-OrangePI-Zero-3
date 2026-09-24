@@ -1,0 +1,26 @@
+# Flycast (Dreamcast / NAOMI / Atomiswave) core options for the Zero3.
+#
+# Every key and value below was read out of the built core ON THE BOARD with
+# tools/core-info (2026-09-24, Flycast v2.7). Note the keys still carry the
+# old "reicast_" prefix; "flycast_*" keys would be silently ignored.
+# Starting points for this class of hardware, not yet measured on this board.
+
+# Native Dreamcast resolution. RetroArch scales to 1080p on the GPU.
+reicast_internal_resolution = "640x480"
+
+# Rendering on its own thread. The default, pinned because it is the
+# single biggest performance setting on a 4-core A53.
+reicast_threaded_rendering = "enabled"
+
+# Skip a frame only when running behind. Smoother than slowing down on the
+# heavy scenes, and a no-op when the game keeps up.
+reicast_auto_skip_frame = "some"
+
+# Anisotropic filtering defaults to 4x. Off, for the Mali-G31's fill rate.
+reicast_anisotropic_filtering = "off"
+
+# BIOS: with this disabled, Flycast uses a real BIOS if
+# _system/bios/dc/dc_boot.bin (+ dc_flash.bin) exists, and falls back to its
+# HLE BIOS automatically when it does not (core/emulator.cpp). So this stays
+# disabled: a real BIOS, if supplied, is used for better compatibility.
+reicast_hle_bios = "disabled"

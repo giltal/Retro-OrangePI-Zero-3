@@ -26,6 +26,8 @@ fail() {
 # --- Known-stale paths ----------------------------------------------------
 # Renamed 2026-09-23: S35alsa -> S11alsa (must run before the launcher).
 rm -f "$TARGET_DIR/etc/init.d/S35alsa"
+# Renamed 2026-09-24 before it ever shipped: S46ppsspp -> S46card.
+rm -f "$TARGET_DIR/etc/init.d/S46ppsspp"
 
 # --- Bring-up: a login prompt on the HDMI console -----------------------
 # Buildroot's inittab only runs a getty on the serial port. If the launcher
@@ -97,6 +99,24 @@ ry=$(sed -n 's/^video_fullscreen_y = "\([0-9]*\)"/\1/p' "$racfg")
 [ "$sw" = "$rx" ] && [ "$sh" = "$ry" ] \
 	|| fail "launcher ${sw}x${sh} but retroarch.cfg video_fullscreen ${rx}x${ry}"
 
+# Every system folder the card is given must be a system the launcher knows,
+# checked in the BINARY: a local package can silently ship a stale build (see
+# build.sh). The list comes from post-image.sh, so the two cannot drift.
+systems=$(sed -n '/^SYSTEMS="/,/"$/p' "$BR2_EXTERNAL_RETROOPI_PATH/board/opi-zero3/post-image.sh" \
+	| tr -d '"\\' | sed 's/^SYSTEMS=//' | tr ' ' '\n' | grep -v -E '^(_system)?$')
+# -n 2: folder names like gb, nes, psp are shorter than strings' default
+# minimum of 4 characters, and would never be printed.
+lstr=$(strings -n 2 "$TARGET_DIR/usr/bin/retroopi_launcher")
+for s in $systems; do
+	printf '%s\n' "$lstr" | grep -qx "$s" \
+		|| fail "launcher binary has no '$s' system entry -- stale build, or post-image.sh and launcher.c disagree"
+done
+
+# The launcher's symbol fallback font, at the path it hard-codes
+# (SYMBOL_FONT_PATH). Without it, every UI symbol is a "missing glyph" box.
+[ -f "$TARGET_DIR/usr/share/fonts/dejavu/DejaVuSans.ttf" ] \
+	|| fail "no /usr/share/fonts/dejavu/DejaVuSans.ttf -- launcher symbols will render as boxes"
+
 # Enough CMA for the scanout buffers at this resolution. At 1080p the kernel's
 # default 32 MiB pool ran out and every game launch failed with
 # "DRM_IOCTL_MODE_CREATE_DUMB failed: Cannot allocate memory".
@@ -126,6 +146,19 @@ if [ -f "$frag" ] && [ -f "$kcfg" ]; then
 	done
 	[ "$bad" -eq 0 ] || fail "kernel config fragment not honoured (see above)"
 fi
+
+# Every core's shared-library dependencies must exist in the target. A core
+# that links against a library that was never installed builds fine and then
+# fails to dlopen on the board, where RetroArch just returns to the launcher.
+# That happened with PPSSPP (libcpu_features.so) and Flycast (nowide.so) under
+# Buildroot's default BUILD_SHARED_LIBS=ON.
+for so in "$TARGET_DIR"/usr/lib/libretro/*.so; do
+	[ -e "$so" ] || continue
+	for lib in $(readelf -d "$so" 2>/dev/null | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+		[ -e "$TARGET_DIR/usr/lib/$lib" ] || [ -e "$TARGET_DIR/lib/$lib" ] \
+			|| fail "$(basename "$so") needs $lib, which is not installed in the target"
+	done
+done
 
 # No diagnostic instrumentation may reach an image. Restoring a core's SOURCE
 # does not rebuild the binary, and target/ is incremental, so an instrumented

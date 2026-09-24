@@ -130,6 +130,15 @@ BR2_PACKAGE_MESA3D_OPENGL_ES=y
 # Pulls in SDL2 / SDL2_ttf / SDL2_image / freetype / libdrm. SDL2 is used only
 # for TTF/PNG surfaces; the launcher does its own KMS.
 BR2_PACKAGE_RETROOPI_LAUNCHER=y
+# Symbol fallback font for the launcher. launcher.ttf has no symbols (gear,
+# star, clock, arrows, PS buttons), which all showed as "missing glyph" boxes.
+# Sans only (~750 KB). The other DejaVu faces default to y, so turn them off.
+BR2_PACKAGE_DEJAVU=y
+BR2_PACKAGE_DEJAVU_SANS=y
+# BR2_PACKAGE_DEJAVU_MONO is not set
+# BR2_PACKAGE_DEJAVU_SERIF is not set
+# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
+# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
 # HDMI mode the launcher asks the TV for. It is also the size of the launcher's
 # framebuffer, so it must be a mode the TV offers. 1920x1080@60 is what
 # essentially every TV offers. 1280x720@60 is the fallback (CEA-mandatory for
@@ -184,6 +193,16 @@ BR2_PACKAGE_LIBRETRO_PCSX=y
 BR2_PACKAGE_LIBRETRO_PARALLELN64=y
 # GBA: gpSP's dynarec, not mGBA's interpreter. Measured 3-5x on Cortex-A7.
 BR2_PACKAGE_LIBRETRO_GPSP=y
+#
+# New on the Zero3, made possible by the Mali-G31's GLES3 (the reference's
+# Mali-400 was GLES2 only). Both use hardware rendering through RetroArch's
+# GLES3 context (retroarch.mk: --enable-opengles3) and an ARM64 dynarec.
+# PSP: PPSSPP, upstream v1.20.4. Needs its assets in system/PPSSPP, which
+# S46ppsspp copies onto the card.
+BR2_PACKAGE_LIBRETRO_PPSSPP=y
+# Dreamcast / NAOMI / Atomiswave: Flycast v2.7. Uses its HLE BIOS unless
+# dc_boot.bin + dc_flash.bin are in _system/bios/dc/.
+BR2_PACKAGE_LIBRETRO_FLYCAST=y
 #
 # Known broken in the reference tree, kept here as documentation:
 #   PICODRIVE  - submodule git server notaz.gp2x.de unreachable

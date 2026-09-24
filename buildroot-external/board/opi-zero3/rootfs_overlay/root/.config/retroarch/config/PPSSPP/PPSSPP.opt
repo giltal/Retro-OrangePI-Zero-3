@@ -1,0 +1,35 @@
+# PPSSPP (PSP) core options for the Zero3: 4x Cortex-A53 @ 1.5 GHz, Mali-G31 MP2.
+#
+# Every key and value below was read out of the built core ON THE BOARD with
+# tools/core-info (2026-09-24, PPSSPP v1.20.4). An invalid key or value is
+# silently ignored, so do not guess. Only settings that differ from the core's
+# defaults, or that matter enough to pin, are listed.
+#
+# Starting points for this class of hardware (the Allwinner H700 handhelds
+# have the same CPU cluster and GPU), not yet measured on this board.
+
+# ARM64 JIT. The IR JIT and interpreter are far slower.
+ppsspp_cpu_core = "JIT"
+
+# Native PSP resolution (1x). RetroArch scales to 1080p on the GPU at no
+# real cost. 960x544 (2x) is the first thing to try on lighter games.
+ppsspp_internal_resolution = "480x272"
+
+# Anisotropic filtering defaults to 16x, which costs fill rate on a Mali-G31
+# MP2 for little visible gain at 1x. Off.
+ppsspp_texture_anisotropic_filtering = "disabled"
+
+# Auto frameskip, at most 2 frames. On this SoC PSP GPU emulation runs on one
+# A53 core, and mid-weight 3D games do not hold 60 without it. Tested on
+# LittleBigPlanet: "feels playable" with this, slow motion without it.
+# Auto means it only skips when the game falls behind, so lighter games are
+# unaffected. Assassin's Creed Bloodlines remains too slow either way.
+#
+# NOTE for measurement: with frameskip on, RetroArch's FPS log counts
+# RENDERED frames, not game speed, so it under-reads. Measure speed with
+# frameskip off.
+ppsspp_auto_frameskip = "enabled"
+ppsspp_frameskip = "2"
+
+# X to confirm, the western layout.
+ppsspp_button_preference = "Cross"

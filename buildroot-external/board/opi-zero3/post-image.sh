@@ -54,7 +54,7 @@ truncate -s "${ROMS_SIZE_MB}M" "$ROMS_IMG"
 # (The reference left atari800 out of this list after its core had been added.)
 SYSTEMS="nes snes gb gbc gba genesis mastersystem gamegear atari2600 atari7800 \
 atari800 pce pcesupergrafx zxspectrum doom neogeo cps1 cps2 cps3 arcade mame \
-n64 psx _system"
+n64 psx psp dreamcast _system"
 
 export MTOOLS_SKIP_CHECK=1
 for d in $SYSTEMS; do
@@ -62,6 +62,9 @@ for d in $SYSTEMS; do
 done
 "$MMD" -i "$ROMS_IMG" "::/_system/states"
 "$MMD" -i "$ROMS_IMG" "::/_system/bios"
+# Optional real Dreamcast BIOS (dc_boot.bin, dc_flash.bin). Flycast falls
+# back to its HLE BIOS without them.
+"$MMD" -i "$ROMS_IMG" "::/_system/bios/dc"
 
 # A note for whoever opens the card on a PC.
 TMPTXT="$(mktemp)"
@@ -77,6 +80,12 @@ Drop ROMs into the folder matching their system, e.g.:
 The launcher scans these folders on startup and hides any that are empty.
 _system holds favourites, recents, saved state and theme - leave it alone.
 _system\bios is where BIOS files go (PlayStation: SCPH1001.BIN).
+  Dreamcast (optional): _system\bios\dc\dc_boot.bin and dc_flash.bin.
+  _system\bios\PPSSPP is created by the console itself - leave it alone.
+
+PSP:       psp\Game.iso (or .cso / .chd)
+Dreamcast: dreamcast\Game.chd (or .cdi), or a GDI set in its own folder:
+           dreamcast\Game Name\disc.gdi + track01.bin, track02.raw, ...
 _system\audio_card (optional): a single digit forcing the ALSA sound card.
 
 This partition is mounted at /opt/roms on the device.

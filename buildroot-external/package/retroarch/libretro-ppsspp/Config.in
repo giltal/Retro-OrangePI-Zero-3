@@ -1,11 +1,15 @@
 config BR2_PACKAGE_LIBRETRO_PPSSPP
-        bool "libretro-ppsspp"
+	bool "libretro-ppsspp"
 	depends on BR2_PACKAGE_RETROARCH
 	depends on BR2_INSTALL_LIBSTDCPP
-        help
-          libretro ppsspp core.
+	depends on BR2_PACKAGE_HAS_LIBGLES
+	select BR2_PACKAGE_LIBPNG
+	select BR2_PACKAGE_ZLIB
+	help
+	  PPSSPP: Sony PlayStation Portable emulator, libretro core
+	  (upstream hrydgard/ppsspp). Hardware rendering through GLES3.
 
-	  http://www.libretro.com
+	  https://www.ppsspp.org
 
-comment "LIBRETRO_PPSSPP needs a toolchain w/ C++"
-	depends on !BR2_INSTALL_LIBSTDCPP
+comment "libretro-ppsspp needs a toolchain w/ C++ and GLES"
+	depends on !BR2_INSTALL_LIBSTDCPP || !BR2_PACKAGE_HAS_LIBGLES

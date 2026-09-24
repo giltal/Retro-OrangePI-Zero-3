@@ -3,7 +3,7 @@
 ## What This Is
 
 Retro gaming console firmware for the **Orange Pi Zero3, 2 GB** (Allwinner **H618**, 4× Cortex-A53
-@ 1.5 GHz, **Mali-G31 MP2**), output over **HDMI at 1280×720** (1080p later).
+@ 1.4 GHz on this speed bin, **Mali-G31 MP2** at up to 600 MHz), output over **HDMI at 1920×1080**.
 
 It is a port of **RetroBPI_M2M** (`C:\BananaPi_Projects\RetroBPI_M2M`), a Banana Pi M2 Magic with
 a DSI panel. The userspace carries over: the launcher, RetroArch and 21 cores, the init scripts,
@@ -64,7 +64,21 @@ missing.
 ## Board
 
 `scripts/board.sh` does status, push, kernel, run and ssh over Ethernet. Write the board IP to
-`~/opi/board_ip` once. Root password `retroopi` (a development credential).
+`~/opi/board_ip` once. Root password `retroopi` (a development credential). Images built on this
+machine include `~/.ssh/retroopi_ed25519.pub`, so key login works right after a reflash.
+
+**`core-info <core.so>`** (on the board) loads a libretro core and prints its `library_name` and
+every core option with its allowed values. Use it:
+- after adding or upgrading a core, to prove the `.so` actually loads on the target
+  (PPSSPP/Flycast built fine and then failed to dlopen);
+- before writing any `.opt` file, since invalid keys and values are silently ignored.
+  Flycast's keys are `reicast_*`, not `flycast_*`.
+
+**Local packages** (`launcher/`, `tools/`) are not re-synced by a plain `make`. `build.sh` with no
+arguments dircleans them first. For a single-target build, run `retroopi-launcher-dirclean` yourself.
+
+**The ROM card is the user's.** Never regenerate it. Anything new a card needs goes into
+`S46card`, which is strictly additive.
 
 ## Key Paths
 
@@ -75,14 +89,14 @@ C:\OrangePI_Projects\RetroOPI_Z3
     configs/opi_zero3_retro_defconfig
     board/opi-zero3/
       linux-retrogaming.config     kernel fragment on arm64 defconfig
-      patches/linux/               49 Armbian patches (HDMI, audio, GPU enable) + README.md
+      patches/linux/               49 Armbian patches (HDMI, audio, GPU enable) + our 0050 (GPU OPP 600 MHz) + README.md
       patches/mesa3d/              dril-for-headless-GBM (needed for kmsro)
       rootfs_overlay/              init scripts, retroarch.cfg, BT config
       post-build.sh                target/ invariants -- keep adding guards here
     package/retroarch/             RetroArch + libretro cores (from the reference)
     package/retroopi-launcher/     launcher package (SCREEN_W/H)
   launcher/                        the launcher (C, DRM/KMS + SDL2_ttf)
-  tools/                           volumed, inject-input, seed-credit
+  tools/                           volumed, inject-input, seed-credit, core-info
   scripts/                         build.sh, board.sh
   firmware/                        build output (gitignored)
 ```

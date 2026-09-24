@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# Bring an existing ROM card up to date with this image.
+#
+# The FAT partition (/opt/roms) belongs to the user. It is created once, when
+# a card is flashed, and never rebuilt, because rebuilding would wipe the ROMs.
+# So anything a newer image adds to the card layout is added here instead, at
+# boot, strictly ADDITIVELY: nothing on the card is ever deleted or renamed.
+#
+#  1. System folders that newer images know about (psp, dreamcast, ...). The
+#     launcher hides empty systems, so an empty folder costs nothing and saves
+#     creating it by hand from Windows.
+#  2. PPSSPP's assets. The PSP core reads fonts, the PPGe UI atlas, language
+#     files and shaders from <system_directory>/PPSSPP, and system_directory is
+#     /opt/roms/_system/bios. They ship in the rootfs (/usr/share/ppsspp/PPSSPP)
+#     and are copied across when the stamp shows a different version. The copy
+#     only adds or overwrites asset files, because PPSSPP keeps the user's PSP
+#     saves in the same tree (PPSSPP/PSP/SAVEDATA).
+#
+# The asset copy is backgrounded and detached: it is thousands of small files
+# on a FAT SD card, and the launcher should not wait for it. A PSP game started
+# within seconds of the very first boot might not find its fonts yet.
+
+ROMS=/opt/roms
+SYSTEMS="psp dreamcast"
+SRC=/usr/share/ppsspp/PPSSPP
+DST=$ROMS/_system/bios/PPSSPP
+STAMP="$DST/.retroopi-assets"
+LOG=/var/log/ppsspp-assets.log
+
+case "$1" in
+	start)
+		# Never write into the bare mount-point directory on the rootfs.
+		grep -q " $ROMS " /proc/mounts || { echo "Card: $ROMS not mounted, skipping"; exit 0; }
+		printf "Card: "
+		made=""
+		for s in $SYSTEMS; do
+			[ -d "$ROMS/$s" ] || { mkdir -p "$ROMS/$s" && made="$made $s"; }
+		done
+		[ -d "$ROMS/_system/bios/dc" ] || { mkdir -p "$ROMS/_system/bios/dc" && made="$made _system/bios/dc"; }
+		[ -n "$made" ] && printf "added folders:%s; " "$made"
+
+		if [ -d "$SRC" ]; then
+			want=$(cat "$SRC/.version" 2>/dev/null || echo unknown)
+			have=$(cat "$STAMP" 2>/dev/null)
+			if [ "$want" = "$have" ]; then
+				echo "PPSSPP assets up to date ($have)"
+			else
+				echo "installing PPSSPP $want assets (background)"
+				setsid /bin/sh -c '
+					mkdir -p "$2" && cp -r "$1/." "$2/" && rm -f "$2/.version" &&
+					echo "$3" > "$4" && sync && echo "done $3 $(date)" ||
+					echo "FAILED $(date)"
+				' sh "$SRC" "$DST" "$want" "$STAMP" </dev/null >>"$LOG" 2>&1 &
+			fi
+		else
+			echo "OK"
+		fi
+		;;
+	stop|restart|reload)
+		;;
+	*)
+		echo "Usage: $0 {start}"
+		exit 1
+esac
+exit 0

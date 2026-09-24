@@ -78,6 +78,14 @@ endif
 ifeq ($(BR2_PACKAGE_HAS_LIBGLES),y)
 	RETROARCH_CONF_OPTS += --enable-opengles
 	RETROARCH_DEPENDENCIES += libgles
+# GLES3/3.1 contexts for hardware-rendered cores. PPSSPP and Flycast request
+# RETRO_HW_CONTEXT_OPENGLES3; without these RetroArch is built with
+# HAVE_OPENGLES3=no and cannot create that context, so the core fails to
+# start. Mesa panfrost on the Mali-G31 provides GLES 3.1. (The reference's
+# Mali-400/lima is GLES 2.0 only, which is why these were never enabled.)
+ifeq ($(BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST),y)
+	RETROARCH_CONF_OPTS += --enable-opengles3 --enable-opengles3_1
+endif
 else
 	RETROARCH_CONF_OPTS += --disable-opengles
 endif
@@ -132,10 +140,15 @@ endef
 RETROARCH_POST_CONFIGURE_HOOKS += RETROARCH_FIX_DRM_INCLUDE
 
 
-# Install wrapper script that sets HOME=/root for config file discovery
+# Install wrapper script that sets HOME=/root for config file discovery.
+# RETROARCH_LOG_FPS=1 turns on patch 0001: one "[Video]: FPS: x/target" line in
+# /tmp/retroarch_verbose.log every fps_update_interval frames (~4 s). That's
+# a few KB an hour, and it makes the real emulation speed measurable over SSH.
+# For cores that always deliver 60 fps (PPSSPP with frame duplication), FPS/60
+# is the emulation speed.
 define RETROARCH_INSTALL_WRAPPER
 	mv $(TARGET_DIR)/usr/bin/retroarch $(TARGET_DIR)/usr/bin/retroarch.bin
-	printf '#!/bin/sh\nexport HOME=/root\nexec /usr/bin/retroarch.bin --verbose "$$@" 2>>/tmp/retroarch_verbose.log\n' > $(TARGET_DIR)/usr/bin/retroarch
+	printf '#!/bin/sh\nexport HOME=/root\nexport RETROARCH_LOG_FPS=1\nexec /usr/bin/retroarch.bin --verbose "$$@" 2>>/tmp/retroarch_verbose.log\n' > $(TARGET_DIR)/usr/bin/retroarch
 	chmod +x $(TARGET_DIR)/usr/bin/retroarch
 endef
 RETROARCH_POST_INSTALL_TARGET_HOOKS += RETROARCH_INSTALL_WRAPPER

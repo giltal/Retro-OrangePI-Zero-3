@@ -1,52 +1,64 @@
 ################################################################################
 #
-# PPSSPP
+# PPSSPP -- PlayStation Portable
 #
 ################################################################################
-LIBRETRO_PPSSPP_VERSION = 6fe7a97462333a4b86da8d4a526e09711f66ff06
-LIBRETRO_PPSSPP_SITE = https://github.com/libretro/ppsspp.git
+# Upstream PPSSPP, not the old libretro/ppsspp fork this package used to pin
+# (a 2018 commit, with Rockchip patches for options that upstream has had for
+# years). Upstream builds the libretro core itself with -DLIBRETRO=ON.
+#
+# git + submodules: PPSSPP vendors its dependencies (glslang, SPIRV-Cross,
+# libchdr, zstd, rcheevos...) and a PREBUILT FFmpeg (ffmpeg/linux/aarch64),
+# none of which are in a GitHub tarball.
+LIBRETRO_PPSSPP_VERSION = v1.20.4
+LIBRETRO_PPSSPP_SITE = https://github.com/hrydgard/ppsspp.git
 LIBRETRO_PPSSPP_SITE_METHOD = git
-LIBRETRO_PPSSPP_GIT_SUBMODULES = yes
+LIBRETRO_PPSSPP_GIT_SUBMODULES = YES
+LIBRETRO_PPSSPP_LICENSE = GPL-2.0+
+LIBRETRO_PPSSPP_DEPENDENCIES = libpng zlib
 
-# Configs for libretro
 LIBRETRO_PPSSPP_CONF_OPTS += -DLIBRETRO=ON
-LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_SDL2=OFF
-LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_QT_UI=OFF
+# Link the vendored sub-libraries INTO the core. Buildroot's cmake-package
+# passes BUILD_SHARED_LIBS=ON by default, so cpu_features etc. were built as
+# separate .so files that are never installed, and on the board the core
+# failed to dlopen: "libcpu_features.so: cannot open shared object file"
+# (found with tools/core-info). A libretro core must be self-contained.
+LIBRETRO_PPSSPP_CONF_OPTS += -DBUILD_SHARED_LIBS=OFF
+# GLES, not desktop GL. With USING_GLES2 the libretro port skips the GL core
+# profile and takes RetroArch's GLES3 context, which is what panfrost on the
+# Mali-G31 provides (GLES 3.1). The name is historical: it means "a GLES
+# target", not "GLES 2.0 only". RetroArch must be built with
+# --enable-opengles3 (see retroarch.mk).
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_GLES2=ON
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_EGL=OFF
+# No window system here: KMS/GBM only. Vulkan code still builds (PPSSPP
+# loads libvulkan at runtime), but no X11/Wayland WSI.
 LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_X11_VULKAN=OFF
-LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_X11=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_WAYLAND_WSI=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_VULKAN_DISPLAY_KHR=OFF
+# Bundled FFmpeg (for PMF video cutscenes), not the system's.
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_FFMPEG=ON
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_SYSTEM_FFMPEG=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_SYSTEM_LIBPNG=ON
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_DISCORD=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_MINIUPNPC=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DHEADLESS=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DUNITTEST=OFF
+LIBRETRO_PPSSPP_CONF_OPTS += -DCMAKE_BUILD_TYPE=Release
 
-LIBRETRO_PPSSPP_CONF_OPTS += -DLINUX=ON
-LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_FFMPEG=OFF
-
-ifeq ($(BR2_arm),y)
-	LIBRETRO_PPSSPP_CONF_OPTS += -DARM=ON
-else
-ifeq ($(BR2_aarch64),y)
-	LIBRETRO_PPSSPP_CONF_OPTS += -DARM64=ON
-endif
-endif
-
-ifeq ($(BR2_ARM_CPU_ARMV7A),y)
-	LIBRETRO_PPSSPP_CONF_OPTS += -DARMV7=ON
-endif
-
-ifeq ($(BR2_PACKAGE_HAS_LIBEGL),y)
-	LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_EGL=ON
-	LIBRETRO_PPSSPP_CONF_OPTS += -DUSING_GLES2=ON
-endif
-
-ifneq ($(BR2_PACKAGE_XLIB_LIBX11),y)
-	LIBRETRO_PPSSPP_CONF_OPTS += -DCMAKE_C_FLAGS=-DMESA_EGL_NO_X11_HEADERS
-	LIBRETRO_PPSSPP_CONF_OPTS += -DCMAKE_CXX_FLAGS=-DMESA_EGL_NO_X11_HEADERS
-endif
-
+# The core looks for its assets (fonts, PPGe atlas, language files) in
+# <system_directory>/PPSSPP. Our system_directory is the FAT partition
+# (/opt/roms/_system/bios), which is created at image time and must never be
+# overwritten on a card that already has ROMs. So the assets ship in the
+# rootfs, and S46ppsspp copies them onto the card only if they are missing.
 define LIBRETRO_PPSSPP_INSTALL_TARGET_CMDS
-	$(INSTALL) -D $(@D)/lib/ppsspp_libretro.so \
+	$(INSTALL) -D -m 0755 $(@D)/lib/ppsspp_libretro.so \
 		$(TARGET_DIR)/usr/lib/libretro/ppsspp_libretro.so
-	$(INSTALL) -D $(@D)/lib/libSPIRV.so $(TARGET_DIR)/usr/lib/
-	$(INSTALL) -D $(@D)/lib/libglslang.so $(TARGET_DIR)/usr/lib/
-	$(INSTALL) -D $(@D)/lib/libHLSL.so $(TARGET_DIR)/usr/lib/
-	$(INSTALL) -D $(@D)/lib/libSPVRemapper.so $(TARGET_DIR)/usr/lib/
+	rm -rf $(TARGET_DIR)/usr/share/ppsspp/PPSSPP
+	mkdir -p $(TARGET_DIR)/usr/share/ppsspp/PPSSPP
+	cp -r $(@D)/assets/. $(TARGET_DIR)/usr/share/ppsspp/PPSSPP/
+	rm -rf $(TARGET_DIR)/usr/share/ppsspp/PPSSPP/debugger
+	echo "$(LIBRETRO_PPSSPP_VERSION)" > $(TARGET_DIR)/usr/share/ppsspp/PPSSPP/.version
 endef
 
 $(eval $(cmake-package))
