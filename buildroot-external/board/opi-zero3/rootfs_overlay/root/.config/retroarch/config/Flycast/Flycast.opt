@@ -16,6 +16,16 @@ reicast_threaded_rendering = "enabled"
 # heavy scenes, and a no-op when the game keeps up.
 reicast_auto_skip_frame = "some"
 
+# Sound DSP off. Flycast is CPU-bound here: its emulation thread
+# ("Flycast-emu") sits at ~97% of one A53 core at the chip's top 1416 MHz,
+# and the AICA DSP (reverb/echo) runs on that thread. Measured, Sonic Adventure
+# 2, audio speed meter: 79.3% with DSP on, then 86.5% and 96.8% (reaching
+# ~100%) with it off. The scene moved during the second run, so the gain is not
+# isolated precisely, but the user judged the game "much better", AND the sound
+# too: below real time the audio is stretched and distorted to keep up, and at
+# ~full speed it is clean, which outweighs losing the DSP's reverb/echo.
+reicast_enable_dsp = "disabled"
+
 # Anisotropic filtering defaults to 4x. Off, for the Mali-G31's fill rate.
 reicast_anisotropic_filtering = "off"
 

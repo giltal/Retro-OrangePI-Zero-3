@@ -585,6 +585,17 @@ checked in the generated patch, given this project's backslash history.
   (Flycast's SH-4 dynarec on the A53).
 - Lesson, again: compare runs only at the same spot, preferably A/B within one session.
 
+**Dreamcast is CPU-bound; DSP off.** Profile during SA2 (meter ~80%): thread `Flycast-emu` at
+**96.8%** of one core (cpu0 100%), the rendering thread at 25%, the other cores mostly idle. The CPU is
+at 1416 MHz, the top of this bin. So it is the SH-4/AICA emulation thread. Flycast's CPU-side knobs
+(from core-info): `reicast_enable_dsp` (System) and `reicast_sh4clock` (Emulation Hacks, default
+200). Same spot, live toggle: DSP on **79.3%** (78.6–79.5, steady) → DSP off **86.5%**, then
+**96.8%** (87.6→101.1, rising). The scene changed during the second run, and the A/B/A confirmation
+was skipped because the user judged the game "much better" and chose DSP off. **The sound is better
+too**, by the user's ear. That fits: below real time RetroArch stretches the audio to keep up (the
+reference's N64 lesson), so a clean ~100% stream beats keeping the DSP's reverb. **Now the default in
+Flycast.opt.** Untested: SH4 underclock (it helps some games and breaks others; per-game).
+
 **First real measurement: Assassin's Creed Bloodlines, gameplay, 60 s: avg 99.1%**
 (12 windows, 97.4–100.3%), with auto frameskip @ 2 and the GPU OPP table (hottest zone 59 °C).
 The FPS log had put this same game at "32%". This title is effectively full speed on this board.
