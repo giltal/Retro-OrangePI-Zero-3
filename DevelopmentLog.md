@@ -498,11 +498,14 @@ it is generally considered unplayable. Open levers:
 
 **LittleBigPlanet (mid-weight 3D).** First reading 51.2 fps (85%). Then a messy A/B, for two
 reasons found along the way:
-1. **Option changes made in RetroArch's menu did not reach `PPSSPP.opt`.** Exits were clean
-   (status 0), and other cores' .opt files are written normally, but no LBP session saved PPSSPP's
-   options. Unexplained, still open. Work-around for experiments: a per-game file
-   (`PPSSPP/psy-lbp.opt`), written **only while no game is running**. RetroArch rewrites that file
-   from its in-memory values on exit, which undid the first attempt.
+1. ~~Option changes made in RetroArch's menu did not reach `PPSSPP.opt`.~~ **RETRACTED: saving
+   works.** A controlled test (change Texture Filtering → Linear, exit with PS+Start, read the file)
+   showed the file written seconds later with the new value. The earlier conclusion came from reading
+   the file while a game was still running, or after the menu's Restart, which does not save. It
+   was never isolated before being logged as a bug. Two things are still true and worth knowing:
+   RetroArch writes core options **when the core unloads**, and it **rewrites a per-game file from
+   its in-memory values on exit**, which undid the first per-game experiment. So edit option files
+   by hand only while no game is running.
 2. **Skip Buffer Effects gives LBP a black screen** at launch (twice).
 Controlled result, same level: Skip Buffer Effects off gives **37.5 fps without Lazy Texture Caching
 and 37.0 with it**, so lazy caching has no effect. Profile: single-thread bound on Main (strace: 0.04 s
