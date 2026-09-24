@@ -569,6 +569,10 @@ then **100.0%, 100.6%**. Generation notes: the file includes no `<stdlib.h>`, so
 for `getenv()`; GCC 14 would reject an implicit declaration. The `\n` in the format string was
 checked in the generated patch, given this project's backslash history.
 
+**First real measurement: Assassin's Creed Bloodlines, gameplay, 60 s: avg 99.1%**
+(12 windows, 97.4–100.3%), with auto frameskip @ 2 and the GPU OPP table (hottest zone 59 °C).
+The FPS log had put this same game at "32%". This title is effectively full speed on this board.
+
 **PSP after the overclock:** the user reports **Assassin's Creed Bloodlines now playable**, with
 PPSSPP's defaults auto frameskip @ 2 and the GPU at 600 MHz (texture filtering Linear). Earlier it
 was 19 fps / ~32% speed with no frameskip at 432 MHz, the worst title tested. Reported by eye, not
