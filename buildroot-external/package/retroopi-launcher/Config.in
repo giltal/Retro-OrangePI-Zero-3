@@ -22,7 +22,7 @@ if BR2_PACKAGE_RETROOPI_LAUNCHER
 
 config BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W
 	int "output width"
-	default 1280
+	default 1920
 	help
 	  Width of the HDMI mode the launcher selects, and of its
 	  framebuffer. The launcher picks the connector mode matching
@@ -31,7 +31,7 @@ config BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_W
 
 config BR2_PACKAGE_RETROOPI_LAUNCHER_SCREEN_H
 	int "output height"
-	default 720
+	default 1080
 	help
 	  Height of the HDMI mode the launcher selects. 720 or 1080.
 

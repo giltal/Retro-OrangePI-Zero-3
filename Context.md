@@ -30,7 +30,7 @@
 |---|---|---|
 | Arch | ARMv7 hard-float | **AArch64**. Every core's platform detection re-audited |
 | Kernel | mainline 6.18.8 + panel patches | mainline **6.18.53** + **49 Armbian patches** for HDMI/audio/GPU |
-| Display | DSI 800×480, mounted 180° | **HDMI 1280×720**, no rotation (RetroArch patch 0007 dropped) |
+| Display | DSI 800×480, mounted 180° | **HDMI 1920×1080** (720p as a build option), no rotation (RetroArch patch 0007 dropped) |
 | GPU | Mali-400 / lima, GLES 2.0 | **Mali-G31 / panfrost, GLES 3.1**. Mesa needs LLVM for it |
 | Mode choice | panel's only mode | launcher **picks the mode matching SCREEN_W×H**. RetroArch uses `video_fullscreen_x/y` |
 | Audio | A33 codec, analog 'Headphone' volume | HDMI via audio hub. **softvol 'Master'** in `/etc/asound.conf`, written by S11alsa |

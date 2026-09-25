@@ -45,6 +45,11 @@ LIBRETRO_PPSSPP_CONF_OPTS += -DUSE_MINIUPNPC=OFF
 LIBRETRO_PPSSPP_CONF_OPTS += -DHEADLESS=OFF
 LIBRETRO_PPSSPP_CONF_OPTS += -DUNITTEST=OFF
 LIBRETRO_PPSSPP_CONF_OPTS += -DCMAKE_BUILD_TYPE=Release
+# -O3, see libretro-flycast.mk: Buildroot's CMake toolchain file empties the
+# Release flags, which left the -O2 from CMAKE_CXX_FLAGS in effect.
+# (A few vendored libraries pin -O2 themselves in PPSSPP's CMakeLists.)
+LIBRETRO_PPSSPP_CONF_OPTS += -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
+LIBRETRO_PPSSPP_CONF_OPTS += -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG"
 
 # The core looks for its assets (fonts, PPGe atlas, language files) in
 # <system_directory>/PPSSPP. Our system_directory is the FAT partition

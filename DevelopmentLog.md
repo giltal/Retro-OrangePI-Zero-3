@@ -637,3 +637,49 @@ card, because the cores need the BIOS. post-build.sh fails the build if a table 
   generator let a later non-BIOS entry overwrite the BIOS mark. Now any BIOS definition wins.
 - Trap: `PARAM.SFO` in Assassin's Creed sits at LBA 54960 (~107 MB). A test CSO made from the
   first 96 MB therefore "failed". The test was the problem, not the reader.
+
+**Compiler optimisation levels, and -O3 for Flycast and PPSSPP.** No level was ever chosen
+deliberately. Buildroot builds everything `-O2` (BR2_OPTIMIZE_2), with `-mcpu=cortex-a53` from the
+toolchain wrapper. Dry-running each core's build (`make -n -B` with its real platform and flags)
+shows which cores override that:
+- PCSX-ReARMed `-Ofast -ffast-math`, ParaLLEl N64 `-Ofast`, gpSP `-O3 -ffast-math`, FUSE `-O3`;
+- everything else is `-O2`: FBA 2012, MAME 2003-Plus, the SNES/NES/Genesis/GB cores and others.
+- **PPSSPP and Flycast were `-O2` too**, although both are CMake Release builds. Buildroot's
+  toolchain file sets `CMAKE_{C,CXX}_FLAGS_RELEASE` to just `-DNDEBUG`, which drops upstream's
+  `-O3`. It sets them only `if(NOT DEFINED ...)`, so both packages now pass
+  `-DCMAKE_{C,CXX}_FLAGS_RELEASE="-O3 -DNDEBUG"`. The Release flags follow `CMAKE_CXX_FLAGS` on
+  the compile line, so `-O3` wins, as the generated `flags.make` confirms.
+
+Measured, Sonic Adventure 2, same spot, 60 s each, audio speed meter: **-O3 86.9%** (80.5–101.8)
+vs **-O2 85.3%** (78.2–93.6). That is +1.6 points against a 10–20 point swing from the scene alone,
+so **within noise**. The planned third run (-O3 again) was not done. Expected: most of the
+emulation thread runs in code Flycast's SH-4 recompiler generates at runtime, which compiler
+flags do not touch. Kept, because it costs nothing and both builds ran cleanly, but **not
+claimed as a speed-up**. PSP at -O3 is unmeasured.
+
+- Traps: `make <pkg>-reconfigure` failed once with "No rule to make target" while a second
+  Buildroot `make printvars` loop was running in the same output dir. It worked when rerun alone.
+  Also, a reconfigured CMake core lands in target/ **unstripped** (PPSSPP 35 MB vs 18 MB) until
+  target-finalize strips it. Strip it before a `board.sh push`.
+- **Dreamcast is single-threaded by design, not by a missing option.** Flycast already renders on
+  its own thread (`reicast_threaded_rendering`). The SH-4, the sound chip and the scheduler share
+  one thread, because the rest of the hardware is timed against the SH-4, and no Dreamcast
+  emulator splits it. Flycast's `pvr.MaxThreads` (option.cpp, default 3) looked promising but only
+  caps the OpenMP threads of **xBRZ texture upscaling** (TexCache.cpp). We build with
+  `USE_OPENMP=OFF`, and the libretro port gives it no option key, so it is inert here.
+
+**Controls help screen.** A tap of PS in the launcher shows a full-screen picture of the pad with
+every binding: the launcher's own in white, the in-game PS + button hotkeys in amber
+(retroarch.cfg, plus volumed's PS + Up/Down volume). `scripts/gen-help-image.py` draws it with
+Pillow (Windows' Python; WSL's has none). The 1920×1080 PNG is committed in the rootfs overlay,
+and the launcher scales it once to the screen. **When a binding changes, update the script and
+regenerate the PNG.**
+- PS is a modifier, so a PS press that is part of a combo must not open the help. The launcher
+  tracks it: a button pressed while PS is held marks the hold as a combo and is ignored until
+  released, for both presses and key repeat. That also fixes a bug: the list cursor used to move
+  along with PS + Up/Down volume changes.
+- The screen closes on the **release** of a button. Closing on a press would leave the release to
+  the main loop, and a PS release there opens the help again.
+- A "PS HELP" hint in the systems footer is the only pointer to it. Tested on the board: shown and
+  closed as expected.
+- For the record: **PS + R1 saves and PS + L1 loads**, following retroarch.cfg.

@@ -35,6 +35,13 @@ LIBRETRO_FLYCAST_CONF_OPTS += -DUSE_LUA=OFF
 LIBRETRO_FLYCAST_CONF_OPTS += -DUSE_DISCORD=OFF
 LIBRETRO_FLYCAST_CONF_OPTS += -DUSE_HOST_LIBZIP=OFF
 LIBRETRO_FLYCAST_CONF_OPTS += -DCMAKE_BUILD_TYPE=Release
+# -O3. Buildroot builds everything -O2 (BR2_OPTIMIZE_2), and its CMake
+# toolchain file empties the Release flags, so upstream's usual Release -O3
+# was never used. The Release flags come after CMAKE_CXX_FLAGS (which carries
+# the -O2) on the compile line, so this -O3 wins. The toolchain file sets
+# them only "if NOT DEFINED", so a -D here takes effect.
+LIBRETRO_FLYCAST_CONF_OPTS += -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG"
+LIBRETRO_FLYCAST_CONF_OPTS += -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG"
 
 define LIBRETRO_FLYCAST_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/flycast_libretro.so \

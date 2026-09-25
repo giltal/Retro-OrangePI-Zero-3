@@ -73,6 +73,11 @@ done
 grep -qx 'neogeo=\*Neo Geo' "$names_dir/fbalpha2012.txt" \
 	|| fail "neogeo is not marked as a BIOS set in fbalpha2012.txt"
 
+# The controls screen a tap of PS shows (launcher help_show()). Without it the
+# tap silently does nothing.
+[ -s "$TARGET_DIR/usr/share/retroopi/help-controller.png" ] \
+	|| fail "help-controller.png missing (rootfs_overlay, scripts/gen-help-image.py)"
+
 # --- Guards ---------------------------------------------------------------
 # Exactly one launcher init script.
 n=$(ls "$TARGET_DIR"/etc/init.d/S??launcher 2>/dev/null | wc -l)
