@@ -3,7 +3,7 @@
 ## What This Is
 
 Retro gaming console firmware for the **Orange Pi Zero3, 2 GB** (Allwinner **H618**, 4× Cortex-A53
-@ 1.4 GHz on this speed bin, **Mali-G31 MP2** at up to 600 MHz), output over **HDMI at 1920×1080**.
+@ 1.512 GHz (patch 0051: an overclock at stock 1.10 V for this speed bin, which stops at 1.416 GHz), **Mali-G31 MP2** at up to 600 MHz), output over **HDMI at 1920×1080**.
 
 It is a port of **RetroBPI_M2M** (`C:\BananaPi_Projects\RetroBPI_M2M`), a Banana Pi M2 Magic with
 a DSI panel. The userspace carries over: the launcher, RetroArch and 21 cores, the init scripts,
@@ -89,7 +89,7 @@ C:\OrangePI_Projects\RetroOPI_Z3
     configs/opi_zero3_retro_defconfig
     board/opi-zero3/
       linux-retrogaming.config     kernel fragment on arm64 defconfig
-      patches/linux/               49 Armbian patches (HDMI, audio, GPU enable) + our 0050 (GPU OPP 600 MHz) + README.md
+      patches/linux/               49 Armbian patches (HDMI, audio, GPU enable) + our 0050 (GPU OPP 600 MHz), 0051 (CPU cooling + 1512 MHz) + README.md
       patches/mesa3d/              dril-for-headless-GBM (needed for kmsro)
       rootfs_overlay/              init scripts, retroarch.cfg, BT config
       post-build.sh                target/ invariants -- keep adding guards here

@@ -814,3 +814,37 @@ Also measured in passing:
   frame"). It was turned off on the reference board for audio reasons and never re-validated here.
   All the PSP runs above had vsync ON on the board (test change, not in the repo yet), with 0
   underruns. Making it the default needs a Dreamcast and an N64 check first.
+
+**vsync ON by default; the SH-4 underclock is not a lever for Sonic.**
+- vsync on, measured on the board in every system tested, with HDMI audio, latency 128 and the
+  default max swapchain of 3. Burnout: 0 underruns. Assassin's Creed: 0. Sonic Adventure 2: 84.3%
+  (vs 85.9% off), 0 underruns. Mario Kart 64: 100.1%, a locked 60.0 fps, 0 underruns. The
+  reference's audio failure with vsync on (A33 codec) does not reproduce on this board, and vsync
+  off drops frames in RetroArch KMS (see above). retroarch.cfg now ships `video_vsync = "true"`.
+- `reicast_sh4clock = "160"`, written into Flycast.opt so it applies from the first block: Sonic
+  83.9% / 17.1 fps vs 84.3% / 22.3 fps at 200. **No gain**; the wait loop shrinks with the clock.
+  The earlier "+5.5" came from a live change plus scene noise. Restored to 200 (the board keeps
+  `Flycast.opt.orig`).
+- Two observations, left open:
+  - RetroArch did not persist the in-menu SH-4 change to Flycast.opt on exit.
+  - Dreamcast's limit stays the SH-4 JIT on one A53 core; Flycast's render thread is fine (~40%)
+    and does not hit PPSSPP's panfrost CPU paths.
+
+**CPU: thermal protection, and 1512 MHz (patch 0051).** The user plans a fan and asked to raise
+the CPU clock for Dreamcast, which is bound by one A53 core.
+- Facts first. The OPP table (sun50i-h616-cpu-opp.dtsi) is filtered by efuse speed grade
+  (`opp-supported-hw`, voltages from `opp-microvolt-speedN`). This chip accepted
+  720/936/1104/1320/1416 and not 1512, so its grade is 0 or 2, both capped at 1416 MHz @ 1.10 V.
+  vdd-cpu (AXP313 dcdc2) is limited to 1.10 V in the Zero3 dts. The cpu-thermal zone's 60/70 °C
+  passive trips had **no cooling-maps**, so the CPU had no throttling below 110 °C critical.
+- 0051 (board dts): trips raised to 80/90 °C and bound to cpu0-3 (map0 on the 80 °C trip,
+  verified `cdev0` on the board); 1512 MHz allowed for grades 0/2 at 1.10 V (supported-hw 0x2f).
+  An overclock for this grade, at an unchanged voltage. The DTB was decompiled and checked before
+  deploying.
+- Stability: tools-free, self-checking stress test (4 workers md5+sha256 a 48 MB random file in
+  tmpfs; references taken at 1416 MHz). 10 min, 1442 rounds (~138 GB), **0 mismatches**, 100%
+  residency at 1512, CPU peak 60 °C without a fan, throttle state 0.
+- Result: Sonic Adventure 2 **84.3% → 89.9%** (1512 MHz 100% of the window, 0 underruns): the
+  +6.6% matches the +6.8% clock, as the profile predicted. Higher clocks need more than 1.10 V,
+  i.e. raising the board's regulator limit. That was deliberately not done without the user's
+  explicit go-ahead and a fan.
