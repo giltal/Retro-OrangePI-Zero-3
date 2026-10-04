@@ -683,3 +683,42 @@ regenerate the PNG.**
 - A "PS HELP" hint in the systems footer is the only pointer to it. Tested on the board: shown and
   closed as expected.
 - For the record: **PS + R1 saves and PS + L1 loads**, following retroarch.cfg.
+
+**exFAT for the ROM partition.** Asked for after a question about supported filesystems. As
+built, only FAT32 was possible: `CONFIG_EXFAT_FS` and both NTFS drivers were off, and fstab
+mounted p2 as `vfat`. Now:
+- Kernel: `CONFIG_EXFAT_FS=y`, `EXFAT_DEFAULT_IOCHARSET="utf8"`. `CONFIG_MSDOS_FS` is pinned
+  off, because an `auto` mount tries every filesystem the kernel lists, and msdos would accept a
+  FAT32 card and show only 8.3 names.
+- fstab: p2 is `auto` with `rw,noatime,umask=0022`. The old `shortname=mixed,utf8` are
+  vfat-only options that would make an exFAT mount FAIL, and the launcher would show no games.
+  They were also redundant: `FAT_DEFAULT_UTF8=y`, and mixed is vfat's default. The resulting vfat
+  mount options are byte-identical to before. post-build.sh fails the build on a non-`auto` type
+  or a vfat-only option; the guard was tested against the real fstab and two broken ones.
+- NTFS deliberately not added: Linux refuses, or mounts read-only, an NTFS volume Windows did not
+  cleanly eject.
+
+Verified on the board. FAT32 and exFAT test images (host `mkfs.vfat`, and a Buildroot-built
+`host-exfatprogs`, since WSL has none and apt needs sudo) mounted with the fstab options. Long,
+mixed-case and non-ASCII names ("Pokémon Café.gba") survived a remount byte for byte, and lookup
+is case-insensitive on both, as in Windows.
+**Surprise: the user's own card was already exFAT**, reformatted in Windows. It mounted as exfat on
+the first boot of the new kernel, and the launcher found 20 systems. The old kernel could not have
+mounted it at all.
+- Trap: busybox `ls` prints non-ASCII bytes as `?`. Check names with `od -c`, not by eye.
+
+**Dreamcast "stopped working": `flycast_libretro.so` on the board was an empty file** (md5
+`d41d8cd98f00b204e9800998ecf8427e`, the md5 of zero bytes). RetroArch could not load the core, so
+every Dreamcast game failed. The `.O2`/`.O3` A/B copies next to it were intact, and the board's
+boot log showed ext4 journal recovery, i.e. an unclean power-off. Restored from `.O3` with
+`cp` + `sync` + `mv` (md5 and core-info verified). A full comparison of usr/ lib/ bin/ sbin/ against
+target/ found no other damaged file.
+- Cause, honestly: **not proven.** The A/B swaps replaced the core with a bare `cp` onto the live
+  file (truncate, then write) and no sync. Truncate-then-rewrite plus an unclean shutdown is the
+  textbook way to get an empty file on ext4. But later pushes ran `sync`, which should have
+  flushed it, so the timing does not fit neatly.
+- Fix regardless: `board.sh push` now writes `<path>.new`, syncs, and renames over the target. A
+  rename is atomic, so a power cut leaves the old file or the new one, never a truncated one. Any
+  hand-written swap script on the board should do the same.
+- Lesson: when one system stops working after a board-side file change, md5 its core first.
+  `md5sum` of an empty file is instantly recognisable.

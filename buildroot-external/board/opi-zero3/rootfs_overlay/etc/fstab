@@ -7,7 +7,7 @@ tmpfs		/tmp		tmpfs	mode=1777	0	0
 tmpfs		/run		tmpfs	mode=0755,nosuid,nodev	0	0
 sysfs		/sys		sysfs	defaults	0	0
 
-# FAT32 ROM partition (SD card p2). The launcher hardcodes /opt/roms and scans
+# ROM partition (SD card p2): FAT32 as built, or exFAT if reformatted in Windows. The launcher hardcodes /opt/roms and scans
 # one subdirectory per system; see launcher/launcher.c. Built and pre-populated
 # by board/opi-zero3/post-image.sh so the card is usable straight after flashing.
 #
@@ -18,4 +18,10 @@ sysfs		/sys		sysfs	defaults	0	0
 #
 # umask=0022 rather than the vfat default so ROMs are world-readable; FAT has no
 # permission bits of its own, so they come from the mount options.
-/dev/mmcblk0p2	/opt/roms	vfat	rw,noatime,umask=0022,shortname=mixed,utf8	0	0
+#
+# Type "auto", so either filesystem mounts. The options must therefore be ones
+# BOTH vfat and exfat accept: a vfat-only option such as shortname= or utf8 makes
+# an exFAT mount fail outright, and the launcher then shows no games. Neither
+# was needed: FAT names are UTF-8 by kernel default (CONFIG_FAT_DEFAULT_UTF8), and
+# shortname=mixed is vfat's own default. post-build.sh checks this line.
+/dev/mmcblk0p2	/opt/roms	auto	rw,noatime,umask=0022	0	0

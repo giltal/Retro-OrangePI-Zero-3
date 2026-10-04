@@ -29,6 +29,7 @@ panel), which was itself a port of the LyraZeroW SuperRetroPack.
 | **Display** | HDMI 1920×1080 (1280×720 as a build option). The launcher picks the matching TV mode and scales its layout to it |
 | **GPU** | Mali-G31 via Mesa panfrost, GLES 3.1. RetroArch `gl` driver on KMS/GBM |
 | **Input** | DualShock 3, wired, or over Bluetooth via a USB dongle |
+| **ROM card** | The card's second partition, FAT32 as flashed. It can be reformatted as exFAT in Windows; the board mounts either |
 | **Audio** | HDMI, with a software volume control the launcher and in-game hotkeys share |
 | **Launcher** | Jump-to-letter, favourites, recents, save-state slots, search, themes. Full game titles for arcade (from the emulators' own game lists) and PSP (read from the disc). A tap of PS shows every control |
 

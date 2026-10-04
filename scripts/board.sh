@@ -71,8 +71,12 @@ push)
 		rcp "$T$p" "root@$BOARD:/tmp/push.$$.$(basename "$p")"
 	done
 	rsh "/etc/init.d/S12launcher stop >/dev/null 2>&1 || true"
+	# Write next to the target, sync, then rename over it. A rename is atomic,
+	# so a power cut leaves the old file or the new one. A cp straight onto
+	# the target truncates it first, and that is how flycast_libretro.so was
+	# found EMPTY (md5 d41d8cd9...) after an unclean power-off.
 	for p in "$@"; do
-		rsh "cp '/tmp/push.$$.$(basename "$p")' '$p' && rm -f '/tmp/push.$$.$(basename "$p")'"
+		rsh "cp '/tmp/push.$$.$(basename "$p")' '$p.new' && sync && mv '$p.new' '$p' && rm -f '/tmp/push.$$.$(basename "$p")'"
 	done
 	rsh "sync; /etc/init.d/S12launcher start >/dev/null 2>&1"
 	for p in "$@"; do

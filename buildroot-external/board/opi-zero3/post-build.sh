@@ -73,6 +73,16 @@ done
 grep -qx 'neogeo=\*Neo Geo' "$names_dir/fbalpha2012.txt" \
 	|| fail "neogeo is not marked as a BIOS set in fbalpha2012.txt"
 
+# The ROM partition mounts as "auto" (FAT32 or exFAT). Only options both
+# drivers accept, or an exFAT card silently shows no games. See /etc/fstab.
+romline=$(grep -E '^/dev/mmcblk0p2[[:space:]]' "$TARGET_DIR/etc/fstab") \
+	|| fail "no /dev/mmcblk0p2 line in /etc/fstab"
+echo "$romline" | awk '{exit !($3 == "auto")}' \
+	|| fail "ROM partition must mount as type auto (FAT32 and exFAT): $romline"
+if echo "$romline" | grep -qE 'shortname=|[,[:space:]]utf8([,[:space:]]|$)|codepage='; then
+	fail "vfat-only option on the ROM partition breaks exFAT: $romline"
+fi
+
 # The controls screen a tap of PS shows (launcher help_show()). Without it the
 # tap silently does nothing.
 [ -s "$TARGET_DIR/usr/share/retroopi/help-controller.png" ] \
