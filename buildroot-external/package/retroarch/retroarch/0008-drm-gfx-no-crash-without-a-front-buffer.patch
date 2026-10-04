@@ -1,0 +1,52 @@
+From: RetroOPI_Z3
+Subject: [PATCH] gfx/drm: do not crash when the GBM surface has no front buffer
+
+When a core triggers a video driver reinit from the wrong thread (Flycast
+did, fixed in its 0003), the EGL context ends up current on that thread,
+gbm_surface_lock_front_buffer() returns NULL on the main thread and the
+next call, gbm_bo_get_user_data(NULL), segfaulted (read at 0x20). Skip
+that flip instead, and fail the mode set cleanly in the same case. Also
+fix the mode-switch path, which released drm->bo twice and never
+drm->next_bo.
+
+diff -ruN a/gfx/drivers_context/drm_ctx.c b/gfx/drivers_context/drm_ctx.c
+--- a/gfx/drivers_context/drm_ctx.c	2026-10-04 21:11:43.782175711 +0300
++++ b/gfx/drivers_context/drm_ctx.c	2026-10-04 21:11:43.782175711 +0300
+@@ -543,6 +543,14 @@
+    struct drm_fb *fb = NULL;
+ 
+    drm->next_bo      = gbm_surface_lock_front_buffer(drm->gbm_surface);
++   /* After a video driver reinit (e.g. a core changing its timing with
++    * SET_SYSTEM_AV_INFO) the surface can have no front buffer yet:
++    * gbm_bo_get_user_data(NULL) segfaulted. Skip this flip instead. */
++   if (!drm->next_bo)
++   {
++      RARCH_WARN("[KMS]: No front buffer to flip, skipping frame.\n");
++      return false;
++   }
+    fb                = (struct drm_fb*)gbm_bo_get_user_data(drm->next_bo);
+ 
+    if (!fb)
+@@ -577,8 +585,8 @@
+       {
+          if (drm->bo)
+             gbm_surface_release_buffer(drm->gbm_surface, drm->bo);
+-         if (drm->next_bo)
+-            gbm_surface_release_buffer(drm->gbm_surface, drm->bo);
++         if (drm->next_bo && drm->next_bo != drm->bo)
++            gbm_surface_release_buffer(drm->gbm_surface, drm->next_bo);
+          egl_ctx_data_t *egl = &drm->egl;
+          eglDestroySurface(egl->dpy, egl->surf);
+ 
+@@ -921,6 +929,11 @@
+ #endif
+ 
+    drm->bo   = gbm_surface_lock_front_buffer(drm->gbm_surface);
++   if (!drm->bo)
++   {
++      RARCH_ERR("[KMS]: No front buffer after EGL setup.\n");
++      goto error;
++   }
+ 
+    if (!(fb = (struct drm_fb*)gbm_bo_get_user_data(drm->bo)))
+       fb     = drm_fb_get_from_bo(drm->bo);

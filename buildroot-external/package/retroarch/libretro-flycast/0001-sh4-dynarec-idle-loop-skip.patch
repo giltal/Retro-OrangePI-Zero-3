@@ -1,0 +1,264 @@
+From: RetroOPI_Z3
+Subject: [PATCH] sh4 dynarec: skip idle polling loops
+
+Games wait for the next frame in small polling loops that an interrupt
+handler ends. Emulated, every spin is JIT code: Sonic Adventure 2 spends
+~23% of the SH-4 thread in one (flag/counter poll + empty callback, four
+blocks). Detect such loops at block-compile time with a conservative static
+check (RAM loads at compile-time-known addresses, ALU/compare/branch, calls
+only to "rts; nop" functions, no loop-carried register) and charge the
+back-edge block a whole timeslice, so the loop runs once per slice while
+emulated time advances unchanged. FLYCAST_IDLESKIP=0 disables it.
+
+diff -ruN a/core/hw/sh4/dyna/decoder.cpp b/core/hw/sh4/dyna/decoder.cpp
+--- a/core/hw/sh4/dyna/decoder.cpp	2026-10-04 19:57:16.561238765 +0300
++++ b/core/hw/sh4/dyna/decoder.cpp	2026-10-04 19:57:16.561238765 +0300
+@@ -951,6 +951,230 @@
+ 	block->guest_cycles += cycleCounter.countCycles(op);
+ }
+ 
++// ---------------------------------------------------------------------------
++// Idle-loop skipping
++//
++// Games wait for the next frame in polling loops: read a flag or counter that
++// an interrupt handler updates, compare, branch back. On real hardware the
++// spinning is free; emulated, every iteration is JIT code (Sonic Adventure 2
++// spends ~23% of the SH-4 thread in one). Such a loop only needs to see the
++// memory change, which happens in interrupt handlers -- and those only run at
++// timeslice boundaries. So charging the loop's back-edge block a whole
++// timeslice per iteration skips the useless spins: the loop runs about once
++// per slice, emulated time advances exactly as before, and the interrupts it
++// waits for fire on schedule.
++//
++// A loop qualifies only if, statically, every instruction in it is:
++//   - a load from a compile-time-known main RAM address (no hardware registers:
++//     a read there may have side effects, e.g. popping a FIFO),
++//   - register ALU work, a compare, or a branch,
++//   - a call (jsr/bsr) to a function that is just "rts; nop",
++// and no register (or T) is read before being written in an iteration and
++// also written in it -- i.e. nothing is carried from one iteration to the
++// next, so a counting delay loop never qualifies. Anything else rejects.
++// Set FLYCAST_IDLESKIP=0 in the environment to disable. Each accepted loop is
++// logged once (NOTICE: release builds compile INFO_LOG out).
++// ---------------------------------------------------------------------------
++static bool idleSkipEnabled()
++{
++	static int enabled = -1;
++	if (enabled < 0)
++	{
++		const char *s = getenv("FLYCAST_IDLESKIP");
++		enabled = !(s != nullptr && s[0] == '0');
++		NOTICE_LOG(DYNAREC, "Idle-loop skipping %s", enabled ? "enabled" : "disabled (FLYCAST_IDLESKIP=0)");
++	}
++	return enabled != 0;
++}
++
++static bool idleIsMainRam(u32 addr)
++{
++	// Area 3 (main RAM and its mirrors) through P0-P3; never P4 (on-chip registers)
++	return (addr >> 29) != 7 && (addr & 0x1C000000) == 0x0C000000;
++}
++
++static bool idleIsEmptyFunction(u32 addr)
++{
++	return idleIsMainRam(addr) && (addr & 1) == 0
++			&& IReadMem16(addr) == 0x000B && IReadMem16(addr + 2) == 0x0009;	// rts; nop
++}
++
++static bool dec_isIdleLoop(u32 start, u32 end)
++{
++	if (mmu_enabled() || end <= start || end - start > 64)
++		return false;
++	enum { PR = 16, T = 17, NREGS = 18 };
++	u32 val[NREGS] = {};
++	bool cnst[NREGS] = {};		// known at compile time (immediate / literal)
++	bool snap[NREGS] = {};		// loaded from RAM: known now, may differ later
++	u32 defWritten = 0;		// written on every path so far
++	u32 anyWritten = 0;
++	u32 readFirst = 0;		// read before a dominating write
++	u32 condUntil = 0;		// code below this address may be skipped by a forward branch
++
++	auto rd = [&](u32 r) { if (!(defWritten & (1u << r))) readFirst |= 1u << r; };
++	auto wr = [&](u32 pc, u32 r) {
++		anyWritten |= 1u << r;
++		if (pc >= condUntil)
++			defWritten |= 1u << r;
++		cnst[r] = snap[r] = false;
++	};
++	auto load = [&](u32 pc, u32 dst, u32 addr, bool known, u32 size) {
++		if (!known || !idleIsMainRam(addr))
++			return false;
++		wr(pc, dst);
++		if (size == 4)
++		{
++			snap[dst] = true;
++			val[dst] = ReadMem32_nommu(addr);
++		}
++		return true;
++	};
++
++	for (u32 pc = start; pc < end; pc += 2)
++	{
++		const u16 op = IReadMem16(pc);
++		const u32 n = (op >> 8) & 0xf, m = (op >> 4) & 0xf;
++
++		if (op == 0x0009)	// nop
++			continue;
++		switch (op & 0xF000)
++		{
++		case 0xE000:	// mov #imm,Rn
++			wr(pc, n); cnst[n] = true; val[n] = (u32)(s8)op;
++			continue;
++		case 0xD000:	// mov.l @(disp,PC),Rn
++			{
++				u32 lit = (pc & ~3) + 4 + (op & 0xff) * 4;
++				if (!idleIsMainRam(lit))
++					return false;
++				wr(pc, n); cnst[n] = true; val[n] = ReadMem32_nommu(lit);
++			}
++			continue;
++		case 0x9000:	// mov.w @(disp,PC),Rn
++			{
++				u32 lit = pc + 4 + (op & 0xff) * 2;
++				if (!idleIsMainRam(lit))
++					return false;
++				wr(pc, n); cnst[n] = true; val[n] = (u32)(s16)IReadMem16(lit);
++			}
++			continue;
++		case 0x5000:	// mov.l @(disp,Rm),Rn
++			rd(m);
++			if (!load(pc, n, val[m] + (op & 0xf) * 4, cnst[m], 4))
++				return false;
++			continue;
++		case 0x7000:	// add #imm,Rn
++			{
++				rd(n);
++				bool c = cnst[n];
++				u32 v = val[n] + (u32)(s8)op;
++				wr(pc, n);
++				if (c) { cnst[n] = true; val[n] = v; }
++			}
++			continue;
++		case 0xA000:	// bra
++			{
++				s32 d = (op & 0x800) ? (s32)(op & 0xfff) - 0x1000 : (s32)(op & 0xfff);
++				u32 tgt = pc + 4 + d * 2;
++				if (tgt > pc && tgt < end)
++					condUntil = std::max(condUntil, tgt);
++				else if (tgt <= pc && tgt != start)
++					return false;		// inner backward branch: not a simple poll
++			}
++			continue;
++		case 0xB000:	// bsr
++			{
++				s32 d = (op & 0x800) ? (s32)(op & 0xfff) - 0x1000 : (s32)(op & 0xfff);
++				if (!idleIsEmptyFunction(pc + 4 + d * 2))
++					return false;
++				wr(pc, PR);
++			}
++			continue;
++		}
++		switch (op & 0xFF00)
++		{
++		case 0x8900: case 0x8B00: case 0x8D00: case 0x8F00:	// bt, bf, bt/s, bf/s
++			{
++				rd(T);
++				u32 tgt = pc + 4 + (s32)(s8)op * 2;
++				if (tgt > pc && tgt < end)
++					condUntil = std::max(condUntil, tgt);
++				else if (tgt <= pc && tgt != start)
++					return false;
++			}
++			continue;
++		case 0x8800: case 0xC800:	// cmp/eq #imm,R0 / tst #imm,R0
++			rd(0); wr(pc, T);
++			continue;
++		case 0xC900: case 0xCA00: case 0xCB00:	// and/xor/or #imm,R0
++			rd(0); wr(pc, 0);
++			continue;
++		case 0x8400: case 0x8500:	// mov.b/w @(disp,Rm),R0
++			{
++				u32 size = (op & 0x0100) ? 2 : 1;
++				rd(m);
++				if (!load(pc, 0, val[m] + (op & 0xf) * size, cnst[m], size))
++					return false;
++			}
++			continue;
++		}
++		switch (op & 0xF00F)
++		{
++		case 0x6003:	// mov Rm,Rn
++			{
++				rd(m);
++				bool c = cnst[m], s = snap[m];
++				u32 v = val[m];
++				wr(pc, n);
++				cnst[n] = c; snap[n] = s; val[n] = v;
++			}
++			continue;
++		case 0x6000: case 0x6001: case 0x6002:	// mov.b/w/l @Rm,Rn
++			rd(m);
++			if (!load(pc, n, val[m], cnst[m], 1u << (op & 3)))
++				return false;
++			continue;
++		case 0x000C: case 0x000D: case 0x000E:	// mov.b/w/l @(R0,Rm),Rn
++			rd(0); rd(m);
++			if (!load(pc, n, val[0] + val[m], cnst[0] && cnst[m], 1u << ((op & 3) - 0)))
++				return false;
++			continue;
++		case 0x300C: case 0x3008: case 0x2009: case 0x200B: case 0x200A:	// add/sub/and/or/xor Rm,Rn
++			rd(m); rd(n); wr(pc, n);
++			continue;
++		case 0x6007: case 0x600B: case 0x600C: case 0x600D: case 0x600E: case 0x600F: case 0x6008: case 0x6009:
++			rd(m); wr(pc, n);	// not/neg/extu/exts/swap
++			continue;
++		case 0x3000: case 0x3002: case 0x3003: case 0x3006: case 0x3007: case 0x2008: case 0x200C:
++			rd(m); rd(n); wr(pc, T);	// cmp/eq/hs/ge/hi/gt, tst, cmp/str
++			continue;
++		}
++		switch (op & 0xF0FF)
++		{
++		case 0x4008: case 0x4009: case 0x4018: case 0x4019: case 0x4028: case 0x4029:	// shll2/8/16, shlr2/8/16
++			rd(n); wr(pc, n);
++			continue;
++		case 0x4000: case 0x4001:	// shll, shlr (set T)
++			rd(n); wr(pc, n); wr(pc, T);
++			continue;
++		case 0x4011: case 0x4015:	// cmp/pz, cmp/pl
++			rd(n); wr(pc, T);
++			continue;
++		case 0x400B:	// jsr @Rn
++			rd(n);
++			if (!(cnst[n] || snap[n]) || !idleIsEmptyFunction(val[n]))
++				return false;
++			wr(pc, PR);
++			continue;
++		}
++		return false;	// anything else: stores, system/FPU ops, sleep, trapa...
++	}
++	// a value carried from one iteration to the next means the loop counts or
++	// accumulates: not a pure poll
++	return (anyWritten & readFirst) == 0;
++}
++
+ bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
+ {
+ 	blk=rbi;
+@@ -1065,6 +1289,17 @@
+ 
+ 	//make sure we don't use wayy-too-few cycles
+ 	blk->guest_cycles = std::max(1U, blk->guest_cycles);
++
++	// Idle loop: charge the back-edge block a whole timeslice (see above)
++	if ((blk->BlockType == BET_Cond_0 || blk->BlockType == BET_Cond_1 || blk->BlockType == BET_StaticJump)
++			&& blk->BranchBlock != NullAddress && blk->BranchBlock <= blk->vaddr
++			&& blk->vaddr - blk->BranchBlock <= 64 && idleSkipEnabled()
++			&& dec_isIdleLoop(blk->BranchBlock, blk->vaddr + blk->sh4_code_size))
++	{
++		NOTICE_LOG(DYNAREC, "Idle loop %08x-%08x: back-edge block %08x charged %d cycles (was %d)",
++				blk->BranchBlock, blk->vaddr + blk->sh4_code_size, blk->vaddr, SH4_TIMESLICE, blk->guest_cycles);
++		blk->guest_cycles = std::max(blk->guest_cycles, (u32)SH4_TIMESLICE);
++	}
+ 	blk = nullptr;
+ 
+ 	return true;

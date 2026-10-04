@@ -1,0 +1,101 @@
+From: RetroOPI_Z3
+Subject: [PATCH] arm64: inline fipr/ftrv, bit-exact with the C implementations
+
+fipr and ftrv (dot product, 4x4 matrix * vector: the SH-4's 3D transform
+instructions) were C calls from the JIT, ~4% of the SH-4 thread in Sonic
+Adventure 2. The old inline NEON version was commented out upstream "for
+better precision": it worked in single precision. The C code multiplies in
+double and accumulates left to right; float*float products are exact in
+double, so NEON double fmul/fmla in the same order reproduces it exactly.
+
+diff -ruN a/core/rec-ARM64/rec_arm64.cpp b/core/rec-ARM64/rec_arm64.cpp
+--- a/core/rec-ARM64/rec_arm64.cpp	2026-10-04 20:10:05.209842554 +0300
++++ b/core/rec-ARM64/rec_arm64.cpp	2026-10-04 20:10:05.213846796 +0300
+@@ -909,38 +909,66 @@
+ 				}
+ 				break;
+ 
+-			/* fall back to the canonical implementations for better precision
++			// fipr / ftrv inline, BIT-EXACT with the canonical C implementations
++			// (shil_canonical.h innerProduct): those multiply in double and add
++			// left to right, ((p0 + p1) + p2) + p3, then round once to float.
++			// A float*float product is exact in double (24+24 < 53 mantissa
++			// bits), so NEON double fmul/fmla accumulated in the same order gives
++			// the same result -- which is why the old single-precision NEON
++			// version (removed upstream "for better precision") is not used.
++			// Saves the C call and its register writeback on every transform.
++			// Scratch: v0-v7 (the allocator only hands out s8-s15).
+ 			case shop_fipr:
+ 				Add(x9, x28, op.rs1.reg_offset());
+ 				Ld1(v0.V4S(), MemOperand(x9));
+-				if (op.rs1._reg != op.rs2._reg)
+-				{
+-					Add(x9, x28, op.rs2.reg_offset());
+-					Ld1(v1.V4S(), MemOperand(x9));
+-					Fmul(v0.V4S(), v0.V4S(), v1.V4S());
+-				}
+-				else
+-					Fmul(v0.V4S(), v0.V4S(), v0.V4S());
+-				Faddp(v1.V4S(), v0.V4S(), v0.V4S());
+-				Faddp(regalloc.MapVRegister(op.rd), v1.V2S());
++				Add(x9, x28, op.rs2.reg_offset());
++				Ld1(v1.V4S(), MemOperand(x9));
++				Fcvtl(v2.V2D(), v0.V2S());		// fn0 fn1
++				Fcvtl2(v3.V2D(), v0.V4S());		// fn2 fn3
++				Fcvtl(v4.V2D(), v1.V2S());		// fm0 fm1
++				Fcvtl2(v5.V2D(), v1.V4S());		// fm2 fm3
++				Fmul(v2.V2D(), v2.V2D(), v4.V2D());	// p0 p1 (exact)
++				Fmul(v3.V2D(), v3.V2D(), v5.V2D());	// p2 p3 (exact)
++				Faddp(d6, v2.V2D());			// p0 + p1
++				Fadd(d6, d6, d3);			// + p2
++				Dup(d7, v3.V2D(), 1);
++				Fadd(d6, d6, d7);			// + p3
++				Fcvt(s0, d6);
++				host_reg_to_shil_param(op.rd, s0);	// as the C call's f32 return value
+ 				break;
+ 
+ 			case shop_ftrv:
++				// fd[i] = sum_k fn[k] * fm[i + 4k]: column k of XMTRX is fm[4k..4k+3]
+ 				Add(x9, x28, op.rs1.reg_offset());
+ 				Ld1(v0.V4S(), MemOperand(x9));
++				Fcvtl(v6.V2D(), v0.V2S());		// fn0 fn1
++				Fcvtl2(v7.V2D(), v0.V4S());		// fn2 fn3
+ 				Add(x9, x28, op.rs2.reg_offset());
+-				Ld1(v1.V4S(), MemOperand(x9, 16, PostIndex));
+-				Ld1(v2.V4S(), MemOperand(x9, 16, PostIndex));
+-				Ld1(v3.V4S(), MemOperand(x9, 16, PostIndex));
+-				Ld1(v4.V4S(), MemOperand(x9, 16, PostIndex));
+-				Fmul(v5.V4S(), v1.V4S(), s0, 0);
+-				Fmla(v5.V4S(), v2.V4S(), s0, 1);
+-				Fmla(v5.V4S(), v3.V4S(), s0, 2);
+-				Fmla(v5.V4S(), v4.V4S(), s0, 3);
++				Ld1(v1.V4S(), MemOperand(x9, 16, PostIndex));	// k = 0
++				Fcvtl(v2.V2D(), v1.V2S());
++				Fcvtl2(v3.V2D(), v1.V4S());
++				Fmul(v4.V2D(), v2.V2D(), d6, 0);
++				Fmul(v5.V2D(), v3.V2D(), d6, 0);
++				Ld1(v1.V4S(), MemOperand(x9, 16, PostIndex));	// k = 1
++				Fcvtl(v2.V2D(), v1.V2S());
++				Fcvtl2(v3.V2D(), v1.V4S());
++				Fmla(v4.V2D(), v2.V2D(), d6, 1);
++				Fmla(v5.V2D(), v3.V2D(), d6, 1);
++				Ld1(v1.V4S(), MemOperand(x9, 16, PostIndex));	// k = 2
++				Fcvtl(v2.V2D(), v1.V2S());
++				Fcvtl2(v3.V2D(), v1.V4S());
++				Fmla(v4.V2D(), v2.V2D(), d7, 0);
++				Fmla(v5.V2D(), v3.V2D(), d7, 0);
++				Ld1(v1.V4S(), MemOperand(x9));			// k = 3
++				Fcvtl(v2.V2D(), v1.V2S());
++				Fcvtl2(v3.V2D(), v1.V4S());
++				Fmla(v4.V2D(), v2.V2D(), d7, 1);
++				Fmla(v5.V2D(), v3.V2D(), d7, 1);
++				Fcvtn(v0.V2S(), v4.V2D());
++				Fcvtn2(v0.V4S(), v5.V2D());
+ 				Add(x9, x28, op.rd.reg_offset());
+-				St1(v5.V4S(), MemOperand(x9));
++				St1(v0.V4S(), MemOperand(x9));
+ 				break;
+-			*/
+ 
+ 			case shop_frswap:
+ 				Add(x9, x28, op.rs1.reg_offset());

@@ -1,0 +1,102 @@
+From: RetroOPI_Z3
+Subject: [PATCH] libretro: send AV info changes from the main thread only
+
+SET_SYSTEM_AV_INFO makes the frontend rebuild its video driver and GL
+context on the calling thread. CalculateSync() calls it from the SH4
+thread when a game reprograms the PVR sync registers, so with threaded
+rendering RetroArch's context was rebuilt on the emulation thread while
+retro_run() was using it on the main thread: the KMS flip found no front
+buffer and glsm's state bind dereferenced the freed texture-id array
+(Bangai-O, Gunbird 2, Sega Rally 2 crashed ~30 s in). Requests from other
+threads are now queued and sent from retro_run().
+
+diff -ruN a/shell/libretro/libretro.cpp b/shell/libretro/libretro.cpp
+--- a/shell/libretro/libretro.cpp	2026-10-04 22:03:39.364878387 +0300
++++ b/shell/libretro/libretro.cpp	2026-10-04 22:03:39.368850884 +0300
+@@ -22,6 +22,8 @@
+ #include <sys/time.h>
+ #endif
+ #include <mutex>
++#include <atomic>
++#include <thread>
+ 
+ #ifdef __SWITCH__
+ #include <stdlib.h>
+@@ -218,6 +220,18 @@
+ static std::mutex mtx_serialization;
+ static bool gl_ctx_resetting = false;
+ static bool is_dupe;
++// SET_SYSTEM_AV_INFO makes the frontend tear down and rebuild its video driver
++// and GL context on the calling thread. CalculateSync() runs on the SH4 thread
++// (a game writing the PVR sync registers), so with threaded rendering that
++// rebuilt RetroArch's context on the wrong thread while retro_run() was using
++// it: no front buffer to flip, then a segfault in glsm (Bangai-O, Gunbird 2,
++// Sega Rally 2). Requests from other threads are queued for retro_run().
++static std::thread::id main_thread_id;
++static std::atomic<unsigned> avinfo_deferred{0};
++enum { AVINFO_TIMING = 1, AVINFO_FULL = 2, AVINFO_GEOMETRY = 4 };
++static bool onMainThread() {
++	return std::this_thread::get_id() == main_thread_id;
++}
+ static u64 startTime;
+ 
+ // Disk swapping
+@@ -362,6 +376,7 @@
+ // Now comes the interesting stuff
+ void retro_init()
+ {
++	main_thread_id = std::this_thread::get_id();
+ 	first_run = true;
+ 	memset(device_type, -1, sizeof(device_type));
+ 	
+@@ -770,6 +785,12 @@
+ 	if (fps > 0 && fps < 100)
+ 		fps_spg = fps;
+ 
++	if (!onMainThread())
++	{
++		avinfo_deferred |= AVINFO_TIMING;
++		return true;
++	}
++
+ 	if (setAVInfo(avinfo))
+ 	{
+ 		environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
+@@ -792,6 +813,12 @@
+ 	maxFramebufferHeight = std::max(maxFramebufferHeight, framebufferHeight);
+ 	maxFramebufferWidth = std::max(maxFramebufferWidth, framebufferWidth);
+ 
++	if (!onMainThread())
++	{
++		avinfo_deferred |= avinfoNeeded ? AVINFO_FULL : AVINFO_TIMING | AVINFO_GEOMETRY;
++		return;
++	}
++
+ 	if (avinfoNeeded)
+ 	{
+ 		retro_system_av_info avinfo;
+@@ -1254,6 +1281,8 @@
+ 
+ void retro_run()
+ {
++	if (first_run)	// before emu.start(): the SH4 thread reads it
++		main_thread_id = std::this_thread::get_id();
+ 	bool updated = false;
+ 	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
+ 		update_variables(false);
+@@ -1335,6 +1364,15 @@
+ 		environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
+ 	}
+ 
++	if (unsigned deferred = avinfo_deferred.exchange(0))
++	{
++		retro_system_av_info avinfo;
++		if (setAVInfo(avinfo) || (deferred & AVINFO_FULL))
++			environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
++		else if (deferred & AVINFO_GEOMETRY)
++			environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &avinfo.geometry);
++	}
++
+ 	video_cb(is_dupe ? 0 : RETRO_HW_FRAME_BUFFER_VALID, framebufferWidth, framebufferHeight, 0);
+ 
+ 	if (!config::ThreadedRendering || config::LimitFPS)

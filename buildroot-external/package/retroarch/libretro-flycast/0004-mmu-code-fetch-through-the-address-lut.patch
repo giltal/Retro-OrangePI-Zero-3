@@ -1,0 +1,82 @@
+From: RetroOPI_Z3
+Subject: [PATCH] sh4: MMU code fetch through the 4K page address LUT
+
+With the MMU on (Windows CE games), every block dispatch translates the
+next PC through mmu_full_lookup. Its one-entry LRU is shared with data
+accesses, so it nearly always fell through to the hash-table walk over
+three page sizes: half the SH4 thread in Sega Rally 2. Translate user
+pages through mmuAddressLUT, the table the dynarec's data accesses
+already use, and fill it on a successful lookup. Same flush rules
+(full on TLB flush, slot 0 on ASID change) as for data. The arm64
+dispatcher does the same lookup inline, so most block exits under the
+MMU no longer call into C at all.
+
+diff -ruN a/core/hw/sh4/dyna/blockmanager.cpp b/core/hw/sh4/dyna/blockmanager.cpp
+--- a/core/hw/sh4/dyna/blockmanager.cpp	2026-10-04 21:41:39.831011817 +0300
++++ b/core/hw/sh4/dyna/blockmanager.cpp	2026-10-04 21:41:39.831011817 +0300
+@@ -141,6 +141,19 @@
+ 		addr = Sh4cntx.pc;
+ 	}
+ 
++#ifdef FAST_MMU
++	// Every block dispatch under the MMU (WinCE games) comes through here, and
++	// mmu_full_lookup's one-entry LRU is shared with data accesses, so it
++	// nearly always fell through to the hash-table walk: half the SH4 thread
++	// in Sega Rally 2. User-space pages go through the same 4K page LUT that
++	// the dynarec's data accesses use, with the same flush rules.
++	if (addr >> 31 == 0)
++	{
++		u32 page = mmuAddressLUT[addr >> 12];
++		if (page != 0)
++			return bm_GetCode(page | (addr & 0xfff));
++	}
++#endif
+ 	u32 paddr;
+ 	MmuError rv = mmu_instruction_translation(addr, paddr);
+ 	if (rv != MmuError::NONE)
+@@ -148,6 +161,10 @@
+ 		DoMMUException(addr, rv, MMU_TT_IREAD);
+ 		mmu_instruction_translation(Sh4cntx.pc, paddr);
+ 	}
++#ifdef FAST_MMU
++	else if (addr >> 31 == 0)
++		mmuAddressLUT[addr >> 12] = paddr & ~0xfff;
++#endif
+ 
+ 	return bm_GetCode(paddr);
+ }
+diff -ruN a/core/rec-ARM64/rec_arm64.cpp b/core/rec-ARM64/rec_arm64.cpp
+--- a/core/rec-ARM64/rec_arm64.cpp	2026-10-04 21:41:39.831011817 +0300
++++ b/core/rec-ARM64/rec_arm64.cpp	2026-10-04 21:41:39.831011817 +0300
+@@ -1513,6 +1513,31 @@
+ 		}
+ 		else
+ 		{
++			// Translate next_pc inline when it is cheap: P1/P2 are untranslated,
++			// user pages hit mmuAddressLUT (x27), which bm_GetCodeByVAddr fills.
++			// Odd addresses (WinCE syscall traps), P3/P4 and LUT misses take
++			// the C path. Same result as bm_GetCodeByVAddr, without the call.
++			Label slow, user, translated;
++			Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
++			Tbnz(w29, 0, &slow);
++			Tbz(w29, 31, &user);
++			Tbnz(w29, 30, &slow);
++			Mov(w0, w29);
++			B(&translated);
++			Bind(&user);
++			Lsr(w1, w29, 12);
++			Ldr(w0, MemOperand(x27, x1, LSL, 2));
++			Cbz(w0, &slow);
++			Bfxil(w0, w29, 0, 12);
++			Bind(&translated);
++			Sub(x2, x28, offsetof(Sh4RCB, cntx));
++			if (RAM_SIZE == 32_MB)
++				Ubfx(w1, w0, 1, 24);
++			else
++				Ubfx(w1, w0, 1, 23);
++			Ldr(x0, MemOperand(x2, x1, LSL, 3));
++			Br(x0);
++			Bind(&slow);
+ 			Mov(w0, w29);
+ 			GenCallRuntime(bm_GetCodeByVAddr);
+ 		}
