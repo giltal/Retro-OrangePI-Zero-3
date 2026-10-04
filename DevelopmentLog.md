@@ -876,3 +876,16 @@ the CPU clock for Dreamcast, which is bound by one A53 core.
   - busybox tar has no -z.
   - `ssh` inside `while read` swallows the loop's stdin (use `ssh -n`).
   - core-info cannot dlopen C++ cores that need libstdc++ (Gambatte); RetroArch can.
+
+**Shaders for Atari 800/5200 and GBA.**
+- Atari800 (`atari800` folder, ~336×240 source): `hq2x-smooth` (HQ2x then a bilinear stretch, as
+  shipped, LGPL-2.1+): 100.0%, 59.9 fps, GPU 123%. No 16-bit variant needed.
+- GBA (gpSP, `gba`, 240×160): hq2x-smooth 100.5% / GPU 72%. xBR-lv2 2× mediump: 72.6%, GPU 199%
+  (2.7× the Game Boy's pixels). The user chose **hq2x-halphon** (Lior Halphon, MIT): highp 89.7%,
+  54 fps; **mediump 99.0%, 59.0 fps**, GPU saturated. A 16-bit final stretch pass gained nothing
+  (still 99.0%), so it was removed again. Kept at 99% by the user's choice, accepting about one
+  dropped frame per second for the look.
+- Unused files were not shipped: the highp halphon and stock-mp were removed from the repo, from
+  target/ and from the board. The board presets are checked by resolving each `#reference` and
+  every shader/LUT it names; all four folder defaults resolve.
+- Open: gpSP colour correction is still off (no decision yet).

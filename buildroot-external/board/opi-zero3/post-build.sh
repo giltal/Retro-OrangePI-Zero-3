@@ -91,7 +91,9 @@ for p in "$TARGET_DIR"/root/.config/retroarch/config/*/*.glslp; do
 	[ -z "$ref" ] || [ -f "$TARGET_DIR$ref" ] \
 		|| fail "$(basename "$p") references missing $ref"
 done
-for f in xbr-lv2-mp.glsl stock.glsl xbr-lv2-2x-mp.glslp; do
+for f in xbr-lv2-mp.glsl stock.glsl xbr-lv2-2x-mp.glslp \
+	 hq2x-smooth.glslp hqx/hqx-pass1.glsl hqx/hqx-pass2.glsl hqx/hq2x.png \
+	 hq2x-halphon-mp.glslp hqx/hq2x-halphon-mp.glsl; do
 	[ -s "$TARGET_DIR/usr/share/retroopi/shaders/$f" ] || fail "shader $f missing"
 done
 
