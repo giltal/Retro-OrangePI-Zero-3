@@ -717,6 +717,80 @@ static bool rom_is_hidden(const char *path, int sys_idx)
 }
 
 /* =========================================================================
+ * Multi-file games: list the playlist / cue sheet, not its parts
+ *
+ * A two-disc PS1 game is "Grandia (USA).m3u" plus the two .chd files it
+ * names; a cue/bin game is a .cue plus its .bin. The launcher lists only the
+ * .m3u / .cue (the .m3u is also what lets RetroArch swap discs). menu_scan_roms()
+ * and count_roms_in_dir() share this, so the list and the count in the
+ * systems menu always agree.
+ * ========================================================================= */
+
+typedef struct {
+    char **name;    /* file names referenced by the folder's .m3u files */
+    int n, cap;
+} DiscSet;
+
+/* Collect the entries of every .m3u in dir. Only plain names count: an entry
+ * with a '/' points into a subfolder, which is never a top-level list entry. */
+static void discset_load(DiscSet *s, const char *dir)
+{
+    memset(s, 0, sizeof(*s));
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *dot = strrchr(de->d_name, '.');
+        if (!dot || strcasecmp(dot, ".m3u") != 0) continue;
+        char p[MAX_NAME];
+        snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
+        FILE *f = fopen(p, "r");
+        if (!f) continue;
+        char line[MAX_NAME];
+        while (fgets(line, sizeof(line), f)) {
+            line[strcspn(line, "\r\n")] = '\0';     /* CRLF-tolerant */
+            if (line[0] == '\0' || line[0] == '#' || strchr(line, '/'))
+                continue;
+            if (s->n == s->cap) {
+                int cap = s->cap ? s->cap * 2 : 16;
+                char **nn = realloc(s->name, sizeof(char *) * (size_t)cap);
+                if (!nn) break;
+                s->name = nn;
+                s->cap = cap;
+            }
+            s->name[s->n] = strdup(line);
+            if (s->name[s->n]) s->n++;
+        }
+        fclose(f);
+    }
+    closedir(d);
+}
+
+static void discset_free(DiscSet *s)
+{
+    for (int i = 0; i < s->n; i++) free(s->name[i]);
+    free(s->name);
+    memset(s, 0, sizeof(*s));
+}
+
+/* True if dir/name is part of a multi-file game listed under another file. */
+static bool rom_is_disc_part(const char *dir, const char *name, const DiscSet *s)
+{
+    for (int i = 0; i < s->n; i++)
+        if (strcasecmp(s->name[i], name) == 0)
+            return true;
+    /* .bin with a same-named .cue (exFAT and FAT look names up without case) */
+    const char *dot = strrchr(name, '.');
+    if (dot && strcasecmp(dot, ".bin") == 0) {
+        char cue[MAX_NAME];
+        snprintf(cue, sizeof(cue), "%s/%.*s.cue", dir, (int)(dot - name), name);
+        if (access(cue, F_OK) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* =========================================================================
  * DRM Display
  * ========================================================================= */
 
@@ -1972,6 +2046,9 @@ static void menu_scan_roms(int system_entry_idx)
     DIR *d = opendir(sys_path);
     if (!d) return;
 
+    DiscSet discs;
+    discset_load(&discs, sys_path);
+
     struct dirent *de;
     while ((de = readdir(d)) != NULL && g_menu.count < MAX_ENTRIES) {
         if (de->d_name[0] == '.') continue;
@@ -2000,6 +2077,7 @@ static void menu_scan_roms(int system_entry_idx)
         char rom_path[MAX_NAME];
         snprintf(rom_path, MAX_NAME, "%s/%s", sys_path, de->d_name);
         if (rom_is_hidden(rom_path, sys_idx)) continue;
+        if (rom_is_disc_part(sys_path, de->d_name, &discs)) continue;
 
         MenuEntry *e = &g_menu.entries[g_menu.count++];
         rom_display_name(rom_path, sys_idx, e->name, MAX_NAME);
@@ -2009,28 +2087,7 @@ static void menu_scan_roms(int system_entry_idx)
         e->is_favorite = favorites_contains(e->path);
     }
     closedir(d);
-
-    /* Hide .bin files when a matching .cue exists (cue+bin = show cue only) */
-    for (int i = 0; i < g_menu.count; i++) {
-        const char *path_i = g_menu.entries[i].path;
-        const char *dot_i = strrchr(path_i, '.');
-        if (!dot_i || strcasecmp(dot_i, ".bin") != 0) continue;
-        /* Build what the .cue path would look like */
-        char cue_path[MAX_NAME];
-        int base_len = (int)(dot_i - path_i);
-        snprintf(cue_path, MAX_NAME, "%.*s.cue", base_len, path_i);
-        /* Check if that .cue exists in our list */
-        for (int j = 0; j < g_menu.count; j++) {
-            if (strcasecmp(g_menu.entries[j].path, cue_path) == 0) {
-                /* Remove .bin entry by shifting the rest down */
-                memmove(&g_menu.entries[i], &g_menu.entries[i + 1],
-                        (g_menu.count - i - 1) * sizeof(MenuEntry));
-                g_menu.count--;
-                i--; /* Re-check this index */
-                break;
-            }
-        }
-    }
+    discset_free(&discs);
 
     /* A flat folder holding a .gdi: its .bin/.raw files are that disc's
      * tracks, not games. (Only one GDI set can live in a folder, because the
@@ -2387,15 +2444,19 @@ static int count_roms_in_dir(const char *dir_path, int sys_idx)
 {
     DIR *d = opendir(dir_path);
     if (!d) return 0;
+    DiscSet discs;
+    discset_load(&discs, dir_path);
     int count = 0;
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         if (de->d_name[0] == '.') continue;
         if (de->d_type != DT_DIR) {
-            /* Same filters as menu_scan_roms(): BIOS sets are not games. */
+            /* Same filters as menu_scan_roms(): BIOS sets are not games, and
+             * the discs of an .m3u / the .bin of a .cue are not separate games. */
             char p[MAX_NAME];
             snprintf(p, sizeof(p), "%s/%s", dir_path, de->d_name);
-            if (strcmp(de->d_name, "gamenames.txt") != 0 && !rom_is_hidden(p, sys_idx))
+            if (strcmp(de->d_name, "gamenames.txt") != 0 && !rom_is_hidden(p, sys_idx) &&
+                !rom_is_disc_part(dir_path, de->d_name, &discs))
                 count++;
         } else {
             /* A game folder (e.g. a Dreamcast GDI set) counts as one game,
@@ -2408,6 +2469,7 @@ static int count_roms_in_dir(const char *dir_path, int sys_idx)
         }
     }
     closedir(d);
+    discset_free(&discs);
     return count;
 }
 

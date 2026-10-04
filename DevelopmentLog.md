@@ -889,3 +889,24 @@ the CPU clock for Dreamcast, which is bound by one A53 core.
   target/ and from the board. The board presets are checked by resolving each `#reference` and
   every shader/LUT it names; all four folder defaults resolve.
 - Open: gpSP colour correction is still off (no decision yet).
+
+**PS1: Enhanced Resolution on; multi-disc / cue games listed once; the BIOS matters.**
+- `pcsx_rearmed_neon_enhancement_enable = "enabled"`: the 3D scene drawn at 2× (1024×512) by the
+  NEON software renderer on its own thread. PAL 3D game: 100.0%, a locked 50 fps, pcsxr-gpu 56%
+  of a core, main 34%, GPU 29%. The shipped .opt had `gpu_thread_rendering = "sync"`, not a valid
+  value (core-info: auto|disabled|enabled). It was silently ignored, so auto applied anyway; it
+  now says "auto". PCSX-ReARMed auto-enables its "Enh. Res. Speed Hack" for some titles (Grandia
+  is one); no problem seen.
+- Launcher: a game split into `X.m3u` + `X (Disc 1).chd` + `X (Disc 2).chd` was listed three
+  times. New shared helper (DiscSet / rom_is_disc_part): files named in any .m3u in the folder
+  (CRLF-tolerant, # and blank lines skipped, plain names only) and a .bin with a same-named .cue
+  are not listed. menu_scan_roms() and count_roms_in_dir() both use it. The system-list count had
+  never applied the cue/bin rule (header said 37, list showed 35); with the .m3u rule the PS1
+  folder lists 28 and counts 28. The .m3u is what RetroArch's Disc Control swaps discs with.
+- Grandia's title screen ignored the pad while Crash worked: no PS1 BIOS on the card, so
+  PCSX-ReARMed ran its HLE BIOS ("expect compatibility problems"); Grandia reads the pad through
+  BIOS routines. With the user's own BIOS in `_system/bios` (loose files, no subfolder), it works.
+  Search order (frontend/libretro.c loadPSXBios): scph5500/5501/5502, psxonpsp660, scph101,
+  scph7001, scph1001 (.bin), then any file in the folder that looks like a BIOS. The user's
+  DTLH-3000.bin (US, 1995-12-04) was found by content. Its later "stops responding" was the intro
+  FMV, which ignores input.

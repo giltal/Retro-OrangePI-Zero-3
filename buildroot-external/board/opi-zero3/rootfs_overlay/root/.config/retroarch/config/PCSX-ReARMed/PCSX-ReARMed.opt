@@ -1,4 +1,4 @@
-# pcsx_rearmed options, ported from the Lyra project (same Cortex-A7 class).
+# pcsx_rearmed options, first ported from the Lyra project (Cortex-A7).
 #
 # The important ones:
 #   drc            ARM dynarec. Without it the interpreter is hopeless here.
@@ -7,12 +7,20 @@
 #   dithering off  costs image quality, buys fill rate -- this is software
 #                  rasterisation, the Mali-400 cannot help with it.
 #
-# Starting points, not measurements: nothing here has been profiled on this
-# board yet. If games run full speed, dithering and spu_interpolation are the
-# first things to turn back up.
+# Measured on this board (2026-10-04, PAL 3D game, 1080p, vsync on):
+#   enhancement_enable  Enhanced Resolution, the 3D scene drawn at 2x (1024x512)
+#                       by the NEON software renderer: 100.0% speed, a locked
+#                       50 fps; pcsxr-gpu thread 56% of one core, main 34%,
+#                       GPU 29%. The biggest visual upgrade for PS1, nearly free.
+#   gpu_thread_rendering  "auto" draws on its own thread (pcsxr-gpu), which is
+#                       what makes 2x affordable. This line used to say "sync",
+#                       not a valid value (core-info: auto|disabled|enabled), so
+#                       it was silently ignored and auto applied anyway.
+# Dithering stays off: with software rendering it is also a picture choice --
+# the PS1 dither pattern is coarse on a 1080p TV.
 pcsx_rearmed_drc = "enabled"
 pcsx_rearmed_spu_thread = "enabled"
-pcsx_rearmed_gpu_thread_rendering = "sync"
+pcsx_rearmed_gpu_thread_rendering = "auto"
 pcsx_rearmed_frameskip_type = "auto"
 pcsx_rearmed_frameskip_threshold = "33"
 pcsx_rearmed_frameskip_interval = "3"
@@ -21,7 +29,7 @@ pcsx_rearmed_frameskip_interval = "3"
 # The old key is silently ignored, so shipping it would have been a
 # line that looks configured and does nothing.
 pcsx_rearmed_neon_interlace_enable_v2 = "disabled"
-pcsx_rearmed_neon_enhancement_enable = "disabled"
+pcsx_rearmed_neon_enhancement_enable = "enabled"
 pcsx_rearmed_show_bios_bootlogo = "disabled"
 pcsx_rearmed_dithering = "disabled"
 pcsx_rearmed_nocdaudio = "enabled"
