@@ -848,3 +848,31 @@ the CPU clock for Dreamcast, which is bound by one A53 core.
   +6.6% matches the +6.8% clock, as the profile predicted. Higher clocks need more than 1.10 V,
   i.e. raising the board's regulator limit. That was deliberately not done without the user's
   explicit go-ahead and a fan.
+
+**Shaders: smooth pixel-art upscaling for Game Boy / GBC.** The user asked for "rounded edges"
+(anisotropic filtering is irrelevant to 2D). Findings, measured with the GPU fdinfo counters:
+- **Shaders were never applied at game start.** RetroArch's DEFAULT_SHADER_ENABLE is false on
+  non-console builds, a menu "Load" only enables shaders for the session, and config_save_on_exit
+  is off. So the user's saved presets were written but never loaded. Now
+  `video_shader_enable = "true"`.
+- libretro glsl-shaders (commit f8e23ff) mostly targets desktop GLSL. On GLES 3.1 we hit:
+  implicit int→float (reverse-aa post3x pass0/pass1), a fragment output declared before the
+  precision statement, and non-constant global initialisers (xbr-lv2). Fixed in our copies. The
+  presets also reference other folders (`../anti-aliasing`, `../blurs`, …), so a partial copy breaks.
+- **The Mali-G31 MP2 budget is small.** Game Boy with a do-nothing preset: 100.5%, GPU 30%.
+  ScaleFX (5 passes, 3×): 44.5% (float framebuffers made no difference). xBRZ 3×: 36.7%. xBR-lv2
+  computed at full screen resolution is hopeless; at 2× and highp: 65.1%.
+- **16-bit floats double the shader throughput** (Bifrost fp16): xBR-lv2 at 2× with `precision
+  mediump` gives **100.5%, a locked 60 fps** (GPU 172%). xBRZ 2× mediump: 88-99%, scene-dependent
+  (rejected). HQ2x + bilinear: 100.5%, GPU 69%.
+- Shipped: /usr/share/retroopi/shaders/ (xbr-lv2-mp.glsl with the GLES fixes and mediump,
+  stock.glsl, xbr-lv2-2x-mp.glslp, README with the measurements). Folder presets
+  config/Gambatte/gb.glslp and gbc.glslp `#reference` it; GBC also measured 100.5%, 60 fps.
+  post-build checks that every referenced preset exists (tested against a complete target and
+  one with the preset removed).
+- The full collection (39 MB) went on the ROM card for testing (_system/shaders). The rootfs is
+  only 1 GB and was 92% full.
+- Traps:
+  - busybox tar has no -z.
+  - `ssh` inside `while read` swallows the loop's stdin (use `ssh -n`).
+  - core-info cannot dlopen C++ cores that need libstdc++ (Gambatte); RetroArch can.

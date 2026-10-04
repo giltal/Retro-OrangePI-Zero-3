@@ -83,6 +83,18 @@ if echo "$romline" | grep -qE 'shortname=|[,[:space:]]utf8([,[:space:]]|$)|codep
 	fail "vfat-only option on the ROM partition breaks exFAT: $romline"
 fi
 
+# Shader presets referenced by the per-system defaults must exist, or RetroArch
+# silently falls back to the plain picture.
+for p in "$TARGET_DIR"/root/.config/retroarch/config/*/*.glslp; do
+	[ -f "$p" ] || continue
+	ref=$(sed -n 's/^#reference "\(.*\)"$/\1/p' "$p")
+	[ -z "$ref" ] || [ -f "$TARGET_DIR$ref" ] \
+		|| fail "$(basename "$p") references missing $ref"
+done
+for f in xbr-lv2-mp.glsl stock.glsl xbr-lv2-2x-mp.glslp; do
+	[ -s "$TARGET_DIR/usr/share/retroopi/shaders/$f" ] || fail "shader $f missing"
+done
+
 # The controls screen a tap of PS shows (launcher help_show()). Without it the
 # tap silently does nothing.
 [ -s "$TARGET_DIR/usr/share/retroopi/help-controller.png" ] \
