@@ -1,0 +1,73 @@
+From: RetroOPI_Z3
+Subject: [PATCH] GL: pass the index range to the driver (glDrawRangeElements)
+
+PPSSPP's GL backend issues indexed draws with glDrawElements, although the
+hardware-transform path already knows how many vertices the indices refer to.
+Without a range, Mesa's panfrost (Mali Bifrost, e.g. the Mali-G31 in the
+Allwinner H618) must find min/max by scanning every index buffer on the CPU,
+per draw (u_vbuf_get_minmax_index), reading it back from GPU memory. In
+Burnout Legends that scan was ~37% of the render thread.
+
+Pass [0, vertexCount - 1] for the hardware-transform path only. The software
+path can expand vertices and keeps glDrawElements, as does any caller that
+does not supply a range.
+
+diff -ruN a/Common/GPU/OpenGL/GLQueueRunner.cpp b/Common/GPU/OpenGL/GLQueueRunner.cpp
+--- a/Common/GPU/OpenGL/GLQueueRunner.cpp	2026-10-04 10:17:05.688174040 +0300
++++ b/Common/GPU/OpenGL/GLQueueRunner.cpp	2026-10-04 10:17:05.692179112 +0300
+@@ -1233,7 +1233,11 @@
+ 					glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buf);
+ 					curElemArrayBuffer = buf;
+ 				}
+-				if (c.draw.instances == 1) {
++				if (c.draw.instances == 1 && c.draw.maxIndex >= 0 && glDrawRangeElements &&
++					(!gl_extensions.IsGLES || gl_extensions.GLES3)) {
++					// Index range known: the driver need not scan the indices to find it.
++					glDrawRangeElements(c.draw.mode, 0, c.draw.maxIndex, c.draw.count, c.draw.indexType, (void *)(intptr_t)c.draw.indexOffset);
++				} else if (c.draw.instances == 1) {
+ 					glDrawElements(c.draw.mode, c.draw.count, c.draw.indexType, (void *)(intptr_t)c.draw.indexOffset);
+ 				} else {
+ 					glDrawElementsInstanced(c.draw.mode, c.draw.count, c.draw.indexType, (void *)(intptr_t)c.draw.indexOffset, c.draw.instances);
+diff -ruN a/Common/GPU/OpenGL/GLQueueRunner.h b/Common/GPU/OpenGL/GLQueueRunner.h
+--- a/Common/GPU/OpenGL/GLQueueRunner.h	2026-10-04 10:17:05.688174040 +0300
++++ b/Common/GPU/OpenGL/GLQueueRunner.h	2026-10-04 10:17:05.692179112 +0300
+@@ -116,6 +116,7 @@
+ 			GLint count;
+ 			GLint indexType;
+ 			GLint instances;
++			GLint maxIndex;  // highest index value used, or -1 if unknown (indexed draws)
+ 		} draw;
+ 		struct {
+ 			const char *name;  // if null, use loc
+diff -ruN a/Common/GPU/OpenGL/GLRenderManager.h b/Common/GPU/OpenGL/GLRenderManager.h
+--- a/Common/GPU/OpenGL/GLRenderManager.h	2026-10-04 10:17:05.688174040 +0300
++++ b/Common/GPU/OpenGL/GLRenderManager.h	2026-10-04 10:17:05.692179112 +0300
+@@ -766,7 +766,7 @@
+ 	}
+ 
+ 	// Would really love to have a basevertex parameter, but impossible in unextended GLES, without glDrawElementsBaseVertex, unfortunately.
+-	void DrawIndexed(GLRInputLayout *inputLayout, GLRBuffer *vertexBuffer, uint32_t vertexOffset, GLRBuffer *indexBuffer, uint32_t indexOffset, GLenum mode, int count, GLenum indexType, int instances = 1) {
++	void DrawIndexed(GLRInputLayout *inputLayout, GLRBuffer *vertexBuffer, uint32_t vertexOffset, GLRBuffer *indexBuffer, uint32_t indexOffset, GLenum mode, int count, GLenum indexType, int instances = 1, int maxIndex = -1) {
+ 		_dbg_assert_(vertexBuffer && indexBuffer && curRenderStep_ && curRenderStep_->stepType == GLRStepType::RENDER);
+ 		GLRRenderData &data = curRenderStep_->commands.push_uninitialized();
+ 		data.cmd = GLRRenderCommand::DRAW;
+@@ -779,6 +779,7 @@
+ 		data.draw.count = count;
+ 		data.draw.indexType = indexType;
+ 		data.draw.instances = instances;
++		data.draw.maxIndex = maxIndex;
+ 	}
+ 
+ 	enum { MAX_INFLIGHT_FRAMES = 3 };
+diff -ruN a/GPU/GLES/DrawEngineGLES.cpp b/GPU/GLES/DrawEngineGLES.cpp
+--- a/GPU/GLES/DrawEngineGLES.cpp	2026-10-04 10:17:05.692179112 +0300
++++ b/GPU/GLES/DrawEngineGLES.cpp	2026-10-04 10:17:05.692179112 +0300
+@@ -309,7 +309,7 @@
+ 			render_->DrawIndexed(inputLayout,
+ 				vertexBuffer, vertexBufferOffset,
+ 				indexBuffer, indexBufferOffset,
+-				glprim[prim], vertexCount, GL_UNSIGNED_SHORT);
++				glprim[prim], vertexCount, GL_UNSIGNED_SHORT, 1, maxIndex > 0 ? maxIndex - 1 : -1);
+ 		} else {
+ 			render_->Draw(
+ 				inputLayout, vertexBuffer, vertexBufferOffset,

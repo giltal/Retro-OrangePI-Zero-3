@@ -1,0 +1,38 @@
+From: RetroOPI_Z3
+Subject: [PATCH] GL: do not use glCopyImageSubData on Mesa panfrost
+
+Mesa's panfrost sets pipe->resource_copy_region = util_resource_copy_region,
+so glCopyImageSubData is a CPU copy: the GPU is synced, the source mapped and
+untiled, the destination retiled. PPSSPP uses image copies for framebuffer
+effects; in Burnout Legends on a Mali-G31 (Allwinner H618) that path took ~60%
+of the render thread, the GPU idled at 33% and frames dropped to 10 fps.
+
+Report framebuffer copies as unsupported there, so PPSSPP uses its blit path
+(glBlitFramebuffer), which panfrost executes on the GPU. Measured: the copy
+cost disappears from the profile and displayed frames hold ~30 fps.
+
+diff -ruN a/Common/GPU/OpenGL/thin3d_gl.cpp b/Common/GPU/OpenGL/thin3d_gl.cpp
+--- a/Common/GPU/OpenGL/thin3d_gl.cpp	2026-10-04 10:17:58.520082161 +0300
++++ b/Common/GPU/OpenGL/thin3d_gl.cpp	2026-10-04 10:17:58.520082161 +0300
+@@ -1,4 +1,5 @@
+ #include <cstdio>
++#include <cstring>
+ #include <vector>
+ #include <string>
+ #include <map>
+@@ -585,6 +586,15 @@
+ 	caps_.dualSourceBlend = gl_extensions.ARB_blend_func_extended || gl_extensions.EXT_blend_func_extended;
+ 	caps_.anisoSupported = gl_extensions.EXT_texture_filter_anisotropic;
+ 	caps_.framebufferCopySupported = gl_extensions.OES_copy_image || gl_extensions.NV_copy_image || gl_extensions.EXT_copy_image || gl_extensions.ARB_copy_image;
++	// Mesa panfrost (Mali Midgard/Bifrost/Valhall) implements glCopyImageSubData
++	// with util_resource_copy_region: a CPU copy that waits for the GPU and
++	// untiles and retiles the whole image. With copies on, Burnout Legends spent
++	// ~60% of the render thread there, the GPU sat at 33%, and frames dropped to
++	// 10 fps. Without them PPSSPP falls back to glBlitFramebuffer, which panfrost
++	// runs on the GPU.
++	if (gl_extensions.gpuVendor == GPU_VENDOR_MESA && strstr(gl_extensions.model, "Panfrost")) {
++		caps_.framebufferCopySupported = false;
++	}
+ 	caps_.framebufferBlitSupported = gl_extensions.NV_framebuffer_blit || gl_extensions.ARB_framebuffer_object || gl_extensions.GLES3;
+ 	caps_.framebufferDepthBlitSupported = caps_.framebufferBlitSupported;
+ 	caps_.framebufferStencilBlitSupported = caps_.framebufferBlitSupported;

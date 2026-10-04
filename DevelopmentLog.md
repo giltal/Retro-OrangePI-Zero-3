@@ -722,3 +722,95 @@ target/ found no other damaged file.
   hand-written swap script on the board should do the same.
 - Lesson: when one system stops working after a board-side file change, md5 its core first.
   `md5sum` of an empty file is instantly recognisable.
+
+**Performance deep dive ("an RP2 with 4× A7 and a Mali-400 runs PSP/Dreamcast well, why do we
+struggle?").** Tools: `perf` built dev-only (BR2_PACKAGE_LINUX_TOOLS_PERF in output/.config,
+**not** the defconfig). Linux 6.18's perf does not build with NO_SLANG: the
+`hist_entry__tui_annotate` stubs in util/hist.h carry an extra `u64 al_addr` argument, fixed by
+hand in the build tree. The tool is copied to /tmp on the board. The measurement script reports,
+per window: audio-meter speed, displayed FPS, per-thread CPU, cpufreq residency, temps, GPU
+engine busy time (panfrost fdinfo `drm-engine-*`, after writing 1 to `.../panfrost/*/profiling`),
+and a perf profile of the busiest thread. Stripped .so addresses are resolved with the build
+tree's copies: Mesa's `libgallium` in buildroot-build is unstripped with identical .text, and
+Flycast relinks without `-s` from its `link.txt`.
+
+Static audit, all clean:
+- CPU pinned at 1416 MHz, 100% residency in gameplay. The cpu-thermal 60/70 °C passive trips have
+  **no cooling device bound**, so they never throttle; only the 110 °C critical trip acts.
+- DRAM LPDDR4 at 792 MHz. JITs compiled in (Flycast rec_arm64, PPSSPP MIPS/ARM64). Quiet dmesg.
+  No run-ahead or rewind.
+
+**Dreamcast, Sonic Adventure 2:** `Flycast-emu` 98.7% of a core, ~75% of it in **JIT-generated SH-4
+code**. Flycast's code cache `SH4_TCB` is an 11 MB array inside .text, so addr2line labels it
+`rdv_BlockCheckFail`, the preceding symbol; `nm` shows `SH4_TCB` at 0x837000. **~23% of the
+thread is one busy-wait loop in the game**, polling game-RAM counters (0x8c29c68c/…c7d4). Flycast
+has no idle-loop skip. The SH-4 underclock (`reicast_sh4clock`) is the lever, but it is applied
+at **block compile time** (decoder.cpp scales `guest_cycles`), so a live change only affects new
+blocks; it must be tested from a fresh start. Live 160 MHz gave 90.4% vs 85.9%: inconclusive.
+GPU fragment ~126% busy, from Flycast's own 640×480 scene rendering.
+**720p output does not help:** 80.8% speed and 121% fragment-busy, i.e. the scaling pass was
+never the cost.
+
+**GPU pipeline:** Flycast renders 640×480 into its own FBO (postProcessor), copies it into
+RetroArch's FBO, and RetroArch draws one nearest-neighbour quad (video_smooth defaults to false
+here) onto a 1920×1080 GBM buffer that KMS flips. The DE33 does no scaling; RetroArch KMS never
+uses plane scalers.
+
+**PSP, Assassin's Creed Bloodlines (1080p):** 99% speed, 37.8 fps displayed (auto frameskip).
+`EmuThread` only ~33%. The limit is PPSSPP's render thread (`Main`, 76%), **84% of it inside Mesa
+on the CPU**: ~50% `pan_access_tiled_image_generic(_aligned)`, CPU (de)tiling of texture uploads,
+and ~16% `u_vbuf_get_minmax_index_mapped`, scanning index buffers for min/max per draw. The
+minmax cache misses because PPSSPP streams its index data. GPU fragment only 62% busy.
+`PAN_MESA_DEBUG=linear` A/B: tiling gone, but `memcpy` takes ~20% (the upload volume itself),
+the kernel 17%, GPU fragment 76%, and displayed fps 34.3 vs 37.8. **No gain; not adopted.**
+Panfrost's own auto-linear conversion (LAYOUT_CONVERT_THRESHOLD 8) does not trigger for PPSSPP.
+
+Conclusions: nothing in our setup is misconfigured. Dreamcast is bound by the SH-4 JIT, a quarter
+of it a game wait loop. PSP is bound by **Mesa panfrost's CPU overhead** for PPSSPP's per-frame
+texture uploads and streamed indices, not by the GPU. The RP2 runs ARM's proprietary Android
+driver and old GLES2 emulator builds, a different workload. Its claimed results are
+**unmeasured** here: a like-for-like stopwatch test on the same game was proposed.
+Test hook left on the board: the RetroArch wrapper sources `/tmp/ra.env` if present (gone after a
+reboot).
+
+**PSP: the "something really basic" (user, on Burnout Legends: clean on a Retroid Pocket 2,
+noticeably worse here).** Burnout at 1080p, measured: speed **88.4%**, **32 fps displayed with
+dips to 9.8**, PPSSPP's render thread (`Main`) at 86% of a core, but the **GPU only 33% busy**.
+Frame-pointer call chains (`perf record -g --call-graph=fp`) work through Mesa. Resolved:
+
+    PPSSPP GLQueueRunner::PerformCopy → glCopyImageSubData → st_CopyImageSubData
+      → util_resource_copy_region → panfrost_ptr_map → pan_load_tiled_image   (~60%)
+    PPSSPP PerformRenderPass → glDrawElements(BaseVertex) → panfrost_draw_vbo
+      → panfrost_get_index_buffer_bounded → u_vbuf_get_minmax_index_mapped        (~13-37%)
+
+1. **Panfrost has no GPU image copy:** `pan_resource.c:2556`
+   `pctx->resource_copy_region = util_resource_copy_region`. Every same-format
+   glCopyImageSubData is a CPU copy: sync the GPU, map, untile, retile. PPSSPP uses image copies
+   for framebuffer effects whenever a `*_copy_image` extension exists (`framebufferCopySupported`),
+   and otherwise falls back to glBlitFramebuffer, which panfrost runs on the GPU. Proven first
+   with `MESA_EXTENSION_OVERRIDE="-GL_OES_copy_image -GL_EXT_copy_image"`: the tiling vanished, the
+   GPU went to 87% busy, the dips were gone (min 27.3 fps), speed 90.6%.
+   → **0002-gl-no-copy-image-on-mesa-panfrost.patch**: `framebufferCopySupported = false` when
+   `gpuVendor == GPU_VENDOR_MESA` and the model contains "Panfrost".
+2. **Index min/max scan per draw:** panfrost needs index bounds and, without them, scans the index
+   buffer on the CPU, reading GPU memory. Its minmax cache misses because PPSSPP streams indices.
+   PPSSPP calls plain glDrawElements although DecodeIndsAndGetData already knows the vertex count
+   (its `maxIndex` output is `numDecodedVerts_`, a COUNT).
+   → **0001-gl-pass-index-range-to-the-driver.patch**: the draw command carries `maxIndex`; with a
+   known range and GLES3, glDrawRangeElements(0, count-1). Hardware-transform path only; the
+   software path can expand vertices and keeps glDrawElements. Mesa then sets
+   `index_bounds_valid` and skips the scan.
+
+Result, same stretch of Burnout: **speed 100.2%, 39.6 fps displayed (min 35.9)**. The render
+thread fell from 86% to 55%, the PSP EmuThread is now the busiest at 63%, the GPU fragment engine
+is at 106% (doing the work), 0 audio underruns. The user: "runs much smoother now". Both patches
+are generated by editing pristine copies and `diff -ruN`, and apply with -p1 to v1.20.4.
+
+Also measured in passing:
+- `PAN_MESA_DEBUG=linear` (no tiling at all): no gain. The tiling cost became memcpy, and GPU
+  sampling got dearer.
+- **Vsync: RetroArch KMS with `video_vsync = false` DROPS every frame that finishes while a page
+  flip is pending** (drm_ctx.c `gfx_ctx_drm_swap_buffers`: "nonblocking mode, so just drop the
+  frame"). It was turned off on the reference board for audio reasons and never re-validated here.
+  All the PSP runs above had vsync ON on the board (test change, not in the repo yet), with 0
+  underruns. Making it the default needs a Dreamcast and an N64 check first.
