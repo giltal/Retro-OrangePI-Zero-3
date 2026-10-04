@@ -75,8 +75,11 @@ push)
 	# so a power cut leaves the old file or the new one. A cp straight onto
 	# the target truncates it first, and that is how flycast_libretro.so was
 	# found EMPTY (md5 d41d8cd9...) after an unclean power-off.
+	# The mode is copied from target/ too: scp lands files as 0700, which once
+	# left /usr/bin/retroarch at 700 instead of the build's 755.
 	for p in "$@"; do
-		rsh "cp '/tmp/push.$$.$(basename "$p")' '$p.new' && sync && mv '$p.new' '$p' && rm -f '/tmp/push.$$.$(basename "$p")'"
+		m=$(stat -c %a "$T$p")
+		rsh "cp '/tmp/push.$$.$(basename "$p")' '$p.new' && chmod $m '$p.new' && sync && mv '$p.new' '$p' && rm -f '/tmp/push.$$.$(basename "$p")'"
 	done
 	rsh "sync; /etc/init.d/S12launcher start >/dev/null 2>&1"
 	for p in "$@"; do
