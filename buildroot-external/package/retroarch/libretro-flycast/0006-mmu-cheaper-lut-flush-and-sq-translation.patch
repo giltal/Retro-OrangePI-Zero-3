@@ -1,0 +1,156 @@
+From: RetroOPI_Z3
+Subject: [PATCH] sh4 mmu: cheaper LUT flush, cached store-queue translation
+
+Two costs left in Sega Rally 2 (Windows CE, full MMU) after 0004/0005:
+- mmuAddressLUTFlush() memset 32 KB of the page LUT on every ASID change
+  (thousands per second) and 2 MB on a TLB flush. The user pages filled
+  since the last flush are now tracked (up to 1024; beyond that it falls
+  back to the memsets) and only those are cleared.
+- Store queue writes (the TA vertex stream) went through mmu_full_lookup
+  each time, whose one-entry LRU is shared with data accesses. The last
+  translation is cached per 1 KB page, invalidated by a generation
+  counter bumped on every TLB entry added, flush and ASID change.
+
+diff -ruN a/core/hw/sh4/dyna/blockmanager.cpp b/core/hw/sh4/dyna/blockmanager.cpp
+--- a/core/hw/sh4/dyna/blockmanager.cpp	2026-10-05 00:02:12.315510211 +0300
++++ b/core/hw/sh4/dyna/blockmanager.cpp	2026-10-05 00:02:12.315510211 +0300
+@@ -163,7 +163,7 @@
+ 	}
+ #ifdef FAST_MMU
+ 	else if (addr >> 31 == 0)
+-		mmuAddressLUT[addr >> 12] = paddr & ~0xfff;
++		mmuAddressLUTSet(addr, paddr);
+ #endif
+ 
+ 	return bm_GetCode(paddr);
+diff -ruN a/core/hw/sh4/modules/fastmmu.cpp b/core/hw/sh4/modules/fastmmu.cpp
+--- a/core/hw/sh4/modules/fastmmu.cpp	2026-10-05 00:02:12.311586143 +0300
++++ b/core/hw/sh4/modules/fastmmu.cpp	2026-10-05 00:02:12.315510211 +0300
+@@ -54,6 +54,7 @@
+ 
+ static void cache_entry(const TLB_Entry &entry)
+ {
++	mmuTlbGeneration++;
+ 	if (entry.Data.SZ0 == 0 && entry.Data.SZ1 == 0)
+ 		return;
+ 	if (full_table_size >= std::size(full_table))
+@@ -69,6 +70,7 @@
+ 
+ static void flush_cache()
+ {
++	mmuTlbGeneration++;
+ 	full_table_size = 0;
+ 	memset(entry_buckets, 0, sizeof(entry_buckets));
+ }
+diff -ruN a/core/hw/sh4/modules/mmu.cpp b/core/hw/sh4/modules/mmu.cpp
+--- a/core/hw/sh4/modules/mmu.cpp	2026-10-05 00:02:12.311586143 +0300
++++ b/core/hw/sh4/modules/mmu.cpp	2026-10-05 00:02:12.315510211 +0300
+@@ -461,6 +461,9 @@
+ 
+ #ifdef FAST_MMU
+ u32 mmuAddressLUT[0x100000];
++u32 mmuLUTFilled[MMU_LUT_TRACKED];
++u32 mmuLUTFilledCount;
++u32 mmuTlbGeneration;
+ #endif
+ 
+ void MMU_init()
+@@ -568,10 +571,26 @@
+ 	}
+ 	else
+ 	{
++#ifdef FAST_MMU
++		// Store queue writes (the TA vertex stream) translate the same page
++		// over and over, and mmu_full_lookup's one-entry LRU is shared with
++		// data accesses. Cached per 1 KB (the smallest page size).
++		static u32 sqGeneration = ~0u, sqVPage, sqPPage;
++		if (sqGeneration == mmuTlbGeneration && (adr & ~0x3ff) == sqVPage)
++		{
++			*out = sqPPage | (adr & 0x3e0);
++			return;
++		}
++#endif
+ 		u32 addr;
+ 		MmuError tv = mmu_full_SQ<MMU_TT_DREAD>(adr, addr);
+ 		if (tv != MmuError::NONE)
+ 			mmu_raise_exception(tv, adr, MMU_TT_DREAD);
++#ifdef FAST_MMU
++		sqGeneration = mmuTlbGeneration;
++		sqVPage = adr & ~0x3ff;
++		sqPPage = addr & ~0x3ff;
++#endif
+ 
+ 		*out = addr;
+ 	}
+diff -ruN a/core/hw/sh4/modules/mmu.h b/core/hw/sh4/modules/mmu.h
+--- a/core/hw/sh4/modules/mmu.h	2026-10-05 00:02:12.311586143 +0300
++++ b/core/hw/sh4/modules/mmu.h	2026-10-05 00:02:12.315510211 +0300
+@@ -119,16 +119,54 @@
+ #ifdef FAST_MMU
+ // maps 4K virtual page number to physical address
+ extern u32 mmuAddressLUT[0x100000];
++// User pages filled since the last flush, so that a flush clears only those
++// instead of a 32 KB memset (slot 0, on every ASID change: thousands of
++// times a second under WinCE) or a 2 MB one.
++constexpr u32 MMU_LUT_TRACKED = 1024;
++extern u32 mmuLUTFilled[MMU_LUT_TRACKED];
++extern u32 mmuLUTFilledCount;	// > MMU_LUT_TRACKED: overflowed, untracked
++// Bumped whenever a translation may change: TLB entry added, flush, ASID change
++extern u32 mmuTlbGeneration;
++
++static inline void mmuAddressLUTSet(u32 vaddr, u32 paddr)
++{
++	u32 vpn = vaddr >> 12;
++	if (mmuAddressLUT[vpn] == 0)
++	{
++		if (mmuLUTFilledCount < MMU_LUT_TRACKED)
++			mmuLUTFilled[mmuLUTFilledCount] = vpn;
++		if (mmuLUTFilledCount <= MMU_LUT_TRACKED)
++			mmuLUTFilledCount++;
++	}
++	mmuAddressLUT[vpn] = paddr & ~0xfff;
++}
+ 
+ static inline void mmuAddressLUTFlush(bool full)
+ {
+-	if (full)
+-		memset(mmuAddressLUT, 0, sizeof(mmuAddressLUT) / 2);	// flush user memory
+-	else
++	constexpr u32 slotPages = (32 * 1024 * 1024) >> 12;
++	mmuTlbGeneration++;
++	if (mmuLUTFilledCount > MMU_LUT_TRACKED)
++	{
++		if (full)
++		{
++			memset(mmuAddressLUT, 0, sizeof(mmuAddressLUT) / 2);	// flush user memory
++			mmuLUTFilledCount = 0;
++		}
++		else
++			// flush slot 0; other slots stay untracked until a full flush
++			memset(mmuAddressLUT, 0, slotPages * sizeof(u32));
++		return;
++	}
++	u32 kept = 0;
++	for (u32 i = 0; i < mmuLUTFilledCount; i++)
+ 	{
+-		constexpr u32 slotPages = (32 * 1024 * 1024) >> 12;
+-		memset(mmuAddressLUT, 0, slotPages * sizeof(u32));		// flush slot 0
++		u32 vpn = mmuLUTFilled[i];
++		if (full || vpn < slotPages)
++			mmuAddressLUT[vpn] = 0;
++		else
++			mmuLUTFilled[kept++] = vpn;
+ 	}
++	mmuLUTFilledCount = kept;
+ }
+ #endif
+ 
+@@ -154,7 +192,7 @@
+ 	}
+ #ifdef FAST_MMU
+ 	if (vaddr >> 31 == 0)
+-		mmuAddressLUT[vaddr >> 12] = paddr & ~0xfff;
++		mmuAddressLUTSet(vaddr, paddr);
+ #endif
+ 
+ 	return paddr;

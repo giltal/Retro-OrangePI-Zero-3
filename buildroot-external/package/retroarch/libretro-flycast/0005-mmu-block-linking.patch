@@ -1,0 +1,165 @@
+From: RetroOPI_Z3
+Subject: [PATCH] arm64: link static block exits with the MMU on
+
+With the MMU on (Windows CE games) no block was ever linked: every exit
+went through the dispatcher (store pc, LUT lookup, fpcb load, one shared
+indirect branch), ~20% of the SH4 thread in Sega Rally 2. Static and
+conditional exits are now linked like without the MMU. A link to a P1/P2
+target is unconditional (untranslated); one to a user page checks that
+mmuAddressLUT still maps the target page to the linked block's physical
+page, and otherwise takes the dispatcher, which refills the LUT. Exits
+are a fixed 12 instructions so they can be rewritten in place, and
+discarded target blocks unlink their referrers as before.
+
+diff -ruN a/core/hw/sh4/dyna/driver.cpp b/core/hw/sh4/dyna/driver.cpp
+--- a/core/hw/sh4/dyna/driver.cpp	2026-10-04 23:56:01.099341389 +0300
++++ b/core/hw/sh4/dyna/driver.cpp	2026-10-04 23:56:01.103271947 +0300
+@@ -286,9 +286,21 @@
+ 			Sh4cntx.pc = rbi->NextBlock;
+ 	}
+ 
+-	DynarecCodeEntryPtr rv = findOrCompile();  // Returns rx ptr
+-
++	DynarecCodeEntryPtr rv;
+ 	if (mmu_enabled())
++	{
++		// The target fetch can raise an MMU exception: compilePC() then returns
++		// null and pc is the handler's. rdv_FailedToFindBlock handles that.
++		rv = bm_GetCodeByVAddr(Sh4cntx.pc);
++		if (rv == ngen_FailedToFindBlock)
++			rv = rdv_FailedToFindBlock(Sh4cntx.pc);
++	}
++	else
++		rv = findOrCompile();  // Returns rx ptr
++
++	// With the MMU on, static exits are linked too (see GenMmuStaticExit);
++	// dynamic ones always go through the dispatcher.
++	if (mmu_enabled() && bcls == BET_CLS_Dynamic)
+ 		return (void *)rv;
+ 	if (!stale_block)
+ 	{
+@@ -310,7 +322,12 @@
+ 		}
+ 		else
+ 		{
+-			RuntimeBlockInfo* nxt = bm_GetBlock(Sh4cntx.pc).get();
++			// blocks are keyed by physical address: under the MMU, find it by its code
++			RuntimeBlockInfo* nxt = mmu_enabled() ? bm_GetBlock((void *)rv).get() : bm_GetBlock(Sh4cntx.pc).get();
++			// under the MMU a linked exit skips next's vaddr check, so next
++			// must have been compiled for this very vaddr
++			if (nxt == nullptr || (mmu_enabled() && nxt->vaddr != Sh4cntx.pc))
++				return (void*)rv;
+ 
+ 			if (rbi->BranchBlock == Sh4cntx.pc)
+ 				rbi->pBranchBlock = nxt;
+diff -ruN a/core/rec-ARM64/rec_arm64.cpp b/core/rec-ARM64/rec_arm64.cpp
+--- a/core/rec-ARM64/rec_arm64.cpp	2026-10-04 23:56:01.099341389 +0300
++++ b/core/rec-ARM64/rec_arm64.cpp	2026-10-04 23:56:01.099341389 +0300
+@@ -69,6 +69,8 @@
+ static DynaCode *blockCheckFail;
+ static DynaCode *checkBlockAddr;
+ static DynaCode *checkBlockFpu;
++// ops of the MMU vaddr check at the start of every block (see CheckBlock)
++constexpr u32 MmuBlockCheckOps = 5;
+ static DynaCode *linkBlockGenericStub;
+ static DynaCode *linkBlockBranchStub;
+ static DynaCode *linkBlockNextStub;
+@@ -1191,6 +1193,56 @@
+ 			Nop();
+ 	}
+ 
++	// MMU on: static block exit from `src` to the SH4 vaddr `target`, always
++	// 12 ops so rdv_LinkBlock can rewrite it in place. Unlinked, it calls the
++	// link stub. Linked, it enters `next` past its vaddr check (always
++	// MmuBlockCheckOps ops, and next->vaddr == target is checked at link
++	// time): directly for a P1/P2 target (untranslated) or one in src's own
++	// page (src runs, so that page is mapped as when linked); for another
++	// user page, only while mmuAddressLUT (x27) still maps it to next's
++	// physical page, else through the dispatcher, which refills the LUT.
++	// Other targets (P3/P4, odd) always use the dispatcher.
++	void GenMmuStaticExit(u32 target, RuntimeBlockInfo *src, RuntimeBlockInfo *next, DynaCode *linkStub)
++	{
++		ptrdiff_t start = GetBuffer()->GetCursorOffset();
++		bool user = (target >> 31) == 0;
++		bool linkable = (target & 1) == 0 && (user || (target >> 30) == 2) && sh4ctx.CpuRunning;
++		if (linkable && next == nullptr)
++		{
++			GenCall(linkStub);
++		}
++		else if (!linkable)
++		{
++			Mov(w29, target);
++			Str(w29, sh4_context_mem_operand(&sh4ctx.pc));
++			GenBranch(arm64_no_update);
++		}
++		else
++		{
++			DynaCode *entry = (DynaCode *)((u8 *)next->code + MmuBlockCheckOps * 4);
++			if (user && (target >> 12) != (src->vaddr >> 12))
++			{
++				Label unmapped;
++				Mov(w1, target >> 12);
++				Ldr(w1, MemOperand(x27, x1, LSL, 2));
++				Mov(w2, next->addr & ~0xfff);
++				Cmp(w1, w2);
++				B(&unmapped, ne);
++				GenBranch(entry);
++				Bind(&unmapped);
++				Mov(w29, target);	// no_update stores it to pc
++				GenBranch(arm64_no_update);
++			}
++			else
++			{
++				GenBranch(entry);
++			}
++		}
++		while (GetBuffer()->GetCursorOffset() - start < 12 * 4)
++			Nop();
++		verify(GetBuffer()->GetCursorOffset() - start == 12 * 4);
++	}
++
+ 	u32 RelinkBlock(RuntimeBlockInfo *block)
+ 	{
+ 		ptrdiff_t start_offset = GetBuffer()->GetCursorOffset();
+@@ -1201,6 +1253,9 @@
+ 		case BET_StaticJump:
+ 		case BET_StaticCall:
+ 			// next_pc = block->BranchBlock;
++			if (mmu_enabled())
++				GenMmuStaticExit(block->BranchBlock, block, block->pBranchBlock, linkBlockGenericStub);
++			else
+ #ifndef NO_BLOCK_LINKING
+ 			if (block->pBranchBlock != NULL)
+ 			{
+@@ -1247,6 +1302,9 @@
+ 				Label branch_not_taken;
+ 
+ 				B(ne, &branch_not_taken);
++				if (mmu_enabled())
++					GenMmuStaticExit(block->BranchBlock, block, block->pBranchBlock, linkBlockBranchStub);
++				else
+ #ifndef NO_BLOCK_LINKING
+ 				if (block->pBranchBlock != NULL)
+ 				{
+@@ -1277,6 +1335,9 @@
+ 
+ 				Bind(&branch_not_taken);
+ 
++				if (mmu_enabled())
++					GenMmuStaticExit(block->NextBlock, block, block->pNextBlock, linkBlockNextStub);
++				else
+ #ifndef NO_BLOCK_LINKING
+ 				if (block->pNextBlock != NULL)
+ 				{
+@@ -2135,8 +2196,9 @@
+ 		if (mmu_enabled())
+ 		{
+ 			// Verify that pc == block->vaddr
+-			Mov(w0, block->vaddr);
+-			Mov(w1, block->addr);
++			// Fixed size: linked MMU exits enter the block right after it
++			Mov_2ops(w0, block->vaddr);
++			Mov_2ops(w1, block->addr);
+ 			GenCall(checkBlockAddr);
+ 		}
+ 
