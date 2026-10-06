@@ -6,17 +6,19 @@ SH4, one sample per 4535 SH4 cycles. When the SH4 runs below full speed
 (Windows CE games such as Sega Rally 2 at ~55%), so did the sound, which
 broke up. New core option "Threaded Audio" (default on): the AICA runs on
 its own thread, paced by the wall clock at 44.1 kHz, pausing when the SH4
-stops or the frontend stops taking audio. The SH4 reaches the AICA
+stops. The SH4 reaches the AICA
 through readAicaReg/writeAicaReg and (de)serialize, which now take a
 recursive mutex the AICA thread holds per 8-sample chunk. SH4 interrupts
 raised on the AICA thread are delivered by the SH4 thread at its next
 AICA tick. Disc reads (CDDA comes from the AICA) are serialised. The
 thread is stopped whenever the emulator stops, resets or terminates, and
-restarted from the SH4 side.
+restarted from the SH4 side. In lockstep, the frontend's audio sync held
+the SH4 to real time; with the AICA threaded the SH4 throttles itself, so
+that emulated time never runs more than 50 ms ahead of the wall clock.
 
 diff -ruN a/core/emulator.cpp b/core/emulator.cpp
---- a/core/emulator.cpp	2026-10-05 17:50:46.120895255 +0300
-+++ b/core/emulator.cpp	2026-10-05 17:50:46.124895255 +0300
+--- a/core/emulator.cpp	2026-10-06 23:01:07.223178180 +0300
++++ b/core/emulator.cpp	2026-10-06 23:01:07.223178180 +0300
 @@ -813,6 +813,7 @@
  		state = Loaded;
  		getSh4Executor()->Stop();
@@ -26,9 +28,9 @@ diff -ruN a/core/emulator.cpp b/core/emulator.cpp
  	{
  		rend_cancel_emu_wait();
 diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
---- a/core/hw/aica/aica.cpp	2026-10-05 17:50:46.120895255 +0300
-+++ b/core/hw/aica/aica.cpp	2026-10-05 17:50:46.124895255 +0300
-@@ -8,9 +8,37 @@
+--- a/core/hw/aica/aica.cpp	2026-10-06 23:01:07.223178180 +0300
++++ b/core/hw/aica/aica.cpp	2026-10-06 23:01:07.223178180 +0300
+@@ -8,9 +8,33 @@
  #include "hw/arm7/arm7.h"
  #include "hw/arm7/arm_mem.h"
  
@@ -37,10 +39,6 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
 +#include <thread>
 +#ifdef __linux__
 +#include <pthread.h>
-+#endif
-+
-+#ifdef LIBRETRO
-+size_t retro_audio_buffered_frames();
 +#endif
 +
  namespace aica
@@ -66,7 +64,7 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
  #define SH4_IRQ_BIT (1 << (holly_SPU_IRQ & 31))
  
  std::deque<u8> midiSendBuffer;
-@@ -65,6 +93,12 @@
+@@ -65,6 +89,12 @@
  static bool UpdateSh4Ints()
  {
  	u32 p_ints = MCIEB->full & MCIPD->full;
@@ -79,7 +77,7 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
  	if (p_ints)
  	{
  		if ((SB_ISTEXT & SH4_IRQ_BIT) == 0)
-@@ -84,8 +118,93 @@
+@@ -84,8 +114,132 @@
  int aica_schid = -1;
  constexpr int AICA_TICK = 4535;		// 44.1 KHz
  
@@ -105,11 +103,9 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
 +			lastBeat = beat;
 +			lastBeatTime = now;
 +		}
-+		// Pause with the SH4 (menu, savestate), or if the frontend stops taking audio
++		// Pause with the SH4 (menu, savestate: with threaded rendering the SH4
++		// also stops when the frontend stops calling retro_run)
 +		bool paused = now - lastBeatTime > milliseconds(100);
-+#ifdef LIBRETRO
-+		paused = paused || retro_audio_buffered_frames() > 8192;
-+#endif
 +		if (paused)
 +		{
 +			std::this_thread::sleep_for(milliseconds(2));
@@ -154,6 +150,46 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
 +		UpdateSh4Ints();
 +}
 +
++// In lockstep, the frontend's audio sync held the SH4 to real time (it blocks
++// once the audio buffers are full). With the AICA on its own thread nothing
++// did, so a game with CPU to spare (and frame skipping) ran too fast: Metropolis
++// Street Racer's lap clock counted 10 s in 5 real seconds. So keep emulated
++// time (one AicaUpdate = one 44.1 kHz sample) from running more than 50 ms
++// ahead of the wall clock. Behind it, there is nothing to make up: slow games
++// just run slow, with the sound still at the right rate.
++static void throttleSh4()
++{
++	using namespace std::chrono;
++	constexpr u32 Every = 64;					// samples between checks
++	constexpr s64 MaxLead = 44100 / 20;			// 50 ms
++	constexpr s64 MaxLag = 44100 / 5;			// 200 ms
++	static u32 ticks;
++	static s64 emulated;
++	static steady_clock::time_point base, lastCheck;
++	if (++ticks < Every)
++		return;
++	ticks = 0;
++	auto now = steady_clock::now();
++	if (now - lastCheck > milliseconds(100))	// first call, or the SH4 was stopped
++	{
++		base = now;
++		emulated = 0;
++	}
++	emulated += Every;
++	s64 lead = emulated - (s64)duration_cast<microseconds>(now - base).count() * 441 / 10000;
++	if (lead > MaxLead)
++	{
++		std::this_thread::sleep_for(microseconds((lead - MaxLead / 2) * 10000 / 441));
++		now = steady_clock::now();
++	}
++	else if (lead < -MaxLag)
++	{
++		base = now;
++		emulated = 0;
++	}
++	lastCheck = now;
++}
++
  static int AicaUpdate(int tag, int cycles, int jitter, void *arg)
  {
 +	if (threadedOption != threadRunning)
@@ -168,12 +204,13 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
 +		sh4Heartbeat.fetch_add(1, std::memory_order_relaxed);
 +		if (sh4IntsPending.exchange(false))
 +			UpdateSh4Ints();
++		throttleSh4();
 +		return AICA_TICK;
 +	}
  	arm::run(1);
  
  	return AICA_TICK;
-@@ -258,6 +377,7 @@
+@@ -258,6 +412,7 @@
  
  void reset(bool hard)
  {
@@ -181,7 +218,7 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
  	if (hard)
  	{
  		initMem();
-@@ -273,6 +393,7 @@
+@@ -273,6 +428,7 @@
  
  void term()
  {
@@ -190,8 +227,8 @@ diff -ruN a/core/hw/aica/aica.cpp b/core/hw/aica/aica.cpp
  	sgc::term();
  	termMem();
 diff -ruN a/core/hw/aica/aica_if.cpp b/core/hw/aica/aica_if.cpp
---- a/core/hw/aica/aica_if.cpp	2026-10-05 17:50:46.120895255 +0300
-+++ b/core/hw/aica/aica_if.cpp	2026-10-05 17:50:46.124895255 +0300
+--- a/core/hw/aica/aica_if.cpp	2026-10-06 23:01:07.223178180 +0300
++++ b/core/hw/aica/aica_if.cpp	2026-10-06 23:01:07.223178180 +0300
 @@ -111,6 +111,7 @@
  template<typename T>
  T readAicaReg(u32 addr)
@@ -225,8 +262,8 @@ diff -ruN a/core/hw/aica/aica_if.cpp b/core/hw/aica/aica_if.cpp
  	deser >> arm::aica_reg_L;
  	deser >> arm::e68k_out;
 diff -ruN a/core/hw/aica/aica_if.h b/core/hw/aica/aica_if.h
---- a/core/hw/aica/aica_if.h	2026-10-05 17:50:46.120895255 +0300
-+++ b/core/hw/aica/aica_if.h	2026-10-05 17:50:46.124895255 +0300
+--- a/core/hw/aica/aica_if.h	2026-10-06 23:01:07.223178180 +0300
++++ b/core/hw/aica/aica_if.h	2026-10-06 23:01:07.223178180 +0300
 @@ -1,10 +1,17 @@
  #pragma once
  #include "types.h"
@@ -246,8 +283,8 @@ diff -ruN a/core/hw/aica/aica_if.h b/core/hw/aica/aica_if.h
  u32 GetRTC_now();
  template<typename T> T readRtcReg(u32 addr);
 diff -ruN a/core/imgread/common.cpp b/core/imgread/common.cpp
---- a/core/imgread/common.cpp	2026-10-05 17:50:46.120895255 +0300
-+++ b/core/imgread/common.cpp	2026-10-05 17:50:46.124895255 +0300
+--- a/core/imgread/common.cpp	2026-10-06 23:01:07.223178180 +0300
++++ b/core/imgread/common.cpp	2026-10-06 23:01:07.223178180 +0300
 @@ -5,6 +5,7 @@
  #include "hw/sh4/sh4_sched.h"
  #include "serialize.h"
@@ -266,526 +303,9 @@ diff -ruN a/core/imgread/common.cpp b/core/imgread/common.cpp
  	if (disc != nullptr)
  		return disc->ReadSectors(startSector, sectorCount, buff, sectorSize, stopOnMiss);
  	if (stopOnMiss)
-diff -ruN a/shell/libretro/audiostream.cpp b/shell/libretro/audiostream.cpp
---- a/shell/libretro/audiostream.cpp	2026-10-05 17:50:46.124895255 +0300
-+++ b/shell/libretro/audiostream.cpp	2026-10-05 17:50:46.124895255 +0300
-@@ -1,253 +1,260 @@
--/*
--    This file is part of Flycast.
--
--    Flycast is free software: you can redistribute it and/or modify
--    it under the terms of the GNU General Public License as published by
--    the Free Software Foundation, either version 2 of the License, or
--    (at your option) any later version.
--
--    Flycast is distributed in the hope that it will be useful,
--    but WITHOUT ANY WARRANTY; without even the implied warranty of
--    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
--    GNU General Public License for more details.
--
--    You should have received a copy of the GNU General Public License
--    along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
-- */
--#include "types.h"
--#include "cfg/option.h"
--#include "audio/audiostream.h"
--#include "emulator.h"
--
--#include <libretro.h>
--
--#include <vector>
--#include <mutex>
--
--/* Detect output refresh rate changes by monitoring
-- * the last 'VSYNC_SWAP_INTERVAL_FRAMES' frames:
-- * - Measure average (mean) audio samples per upload
-- *   operation
-- * - Determine vsync swap interval based on
-- *   expected samples at 60 (or 50) Hz
-- * - Check that vsync swap interval remains
-- *   'stable' for at least 'VSYNC_SWAP_INTERVAL_FRAMES' */
--#define VSYNC_SWAP_INTERVAL_FRAMES 6
--/* Calculated swap interval is 'valid' if it is
-- * within 'VSYNC_SWAP_INTERVAL_THRESHOLD' of an integer
-- * value */
--#define VSYNC_SWAP_INTERVAL_THRESHOLD 0.05f
--
--extern bool setAVInfo(retro_system_av_info& avinfo);
--
--extern retro_environment_t        environ_cb;
--extern retro_audio_sample_batch_t audio_batch_cb;
--
--extern float libretro_expected_audio_samples_per_run;
--extern unsigned libretro_vsync_swap_interval;
--extern bool libretro_detect_vsync_swap_interval;
--
--static float audio_samples_per_frame_avg;
--static unsigned vsync_swap_interval_last;
--static unsigned vsync_swap_interval_conter;
--
--static std::mutex audio_buffer_mutex;
--static std::vector<int16_t> audio_buffer;
--static size_t audio_buffer_idx;
--static size_t audio_batch_frames_max;
--static bool drop_samples = true;
--
--static int16_t *audio_out_buffer = nullptr;
--
--void retro_audio_init(void)
--{
--	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
--
--	/* Worst case is 25 fps content with an audio sample rate
--	 * of 44.1 kHz -> 1764 stereo samples
--	 * But flycast can stop rendering for arbitrary lengths of
--	 * time, leading to multiple 'frames' worth of audio being
--	 * uploaded in retro_run(). We therefore require some leniency,
--	 * but must limit the total number of samples that can be
--	 * uploaded since the libretro frontend can 'hang' if too
--	 * many samples are sent during a single call of retro_run().
--	 * We therefore (arbitrarily) choose to allow up to 10 frames
--	 * worth of 'worst case' stereo samples... */
--	size_t audio_buffer_size = (44100 / 25) * 2 * 10;
--
--	audio_buffer.resize(audio_buffer_size);
--	audio_buffer_idx = 0;
--	audio_batch_frames_max = std::numeric_limits<size_t>::max();
--
--	audio_out_buffer = (int16_t*)malloc(audio_buffer_size * sizeof(int16_t));
--
--	drop_samples = false;
--
--	audio_samples_per_frame_avg = 0.0f;
--	vsync_swap_interval_last = 1;
--	vsync_swap_interval_conter = 0;
--}
--
--void retro_audio_deinit(void)
--{
--	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
--
--	audio_buffer.clear();
--	audio_buffer_idx = 0;
--
--	if (audio_out_buffer != nullptr)
--		free(audio_out_buffer);
--
--	audio_out_buffer = nullptr;
--
--	drop_samples = true;
--
--	audio_samples_per_frame_avg = 0.0f;
--	vsync_swap_interval_last = 1;
--	vsync_swap_interval_conter = 0;
--}
--
--void retro_audio_flush_buffer(void)
--{
--	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
--	audio_buffer_idx = 0;
--
--	/* We are manually 'resetting' the audio buffer
--	 * -> any 'drop samples' lock can be released */
--	drop_samples = false;
--}
--
--void retro_audio_upload(void)
--{
--	audio_buffer_mutex.lock();
--
--	for (size_t i = 0; i < audio_buffer_idx; i++)
--		audio_out_buffer[i] = audio_buffer[i];
--
--	size_t num_frames = audio_buffer_idx >> 1;
--	audio_buffer_idx = 0;
--
--	/* Uploading audio 'resets' the audio buffer
--	 * -> any 'drop samples' lock can be released */
--	drop_samples = false;
--
--	audio_buffer_mutex.unlock();
--
--	/* Attempt to detect changes in output refresh rate */
--	if (libretro_detect_vsync_swap_interval &&
--	    (num_frames > 0))
--	{
--		/* Simple running average (leaky-integrator) */
--		audio_samples_per_frame_avg = ((1.0f / (float)VSYNC_SWAP_INTERVAL_FRAMES) * (float)num_frames) +
--				((1.0f - (1.0f / (float)VSYNC_SWAP_INTERVAL_FRAMES)) * audio_samples_per_frame_avg);
--
--		float swap_ratio = audio_samples_per_frame_avg /
--				libretro_expected_audio_samples_per_run;
--		unsigned swap_integer;
--		float swap_remainder;
--
--		/* If internal frame rate is equal to (within threshold)
--		 * or higher than the default 60 (or 50) Hz, fall back
--		 * to a swap interval of 1 */
--		if (swap_ratio < (1.0f + VSYNC_SWAP_INTERVAL_THRESHOLD))
--		{
--			swap_integer = 1;
--			swap_remainder = 0.0f;
--		}
--		else
--		{
--			swap_integer = (unsigned)(swap_ratio + 0.5f);
--			swap_remainder = swap_ratio - (float)swap_integer;
--			swap_remainder = (swap_remainder < 0.0f) ?
--					-swap_remainder : swap_remainder;
--		}
--
--		/* > Swap interval is considered 'valid' if it is
--		 *   within VSYNC_SWAP_INTERVAL_THRESHOLD of an integer
--		 *   value
--		 * > If valid, check if new swap interval differs from
--		 *   previously logged value */
--		if ((swap_remainder <= VSYNC_SWAP_INTERVAL_THRESHOLD) &&
--			 (swap_integer != libretro_vsync_swap_interval))
--		{
--			vsync_swap_interval_conter =
--					(swap_integer == vsync_swap_interval_last) ?
--							(vsync_swap_interval_conter + 1) : 0;
--
--			/* Check whether swap interval is 'stable' */
--			if (vsync_swap_interval_conter >= VSYNC_SWAP_INTERVAL_FRAMES)
--			{
--				libretro_vsync_swap_interval = swap_integer;
--				vsync_swap_interval_conter = 0;
--
--				/* Notify frontend */
--				retro_system_av_info avinfo;
--				setAVInfo(avinfo);
--				environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
--			}
--
--			vsync_swap_interval_last = swap_integer;
--		}
--		else
--			vsync_swap_interval_conter = 0;
--	}
--
--	int16_t *audio_out_buffer_ptr = audio_out_buffer;
--	while (num_frames > 0)
--	{
--		size_t frames_to_write = (num_frames > audio_batch_frames_max) ?
--				audio_batch_frames_max : num_frames;
--		size_t frames_written = audio_batch_cb(audio_out_buffer_ptr,
--				frames_to_write);
--
--		if ((frames_written < frames_to_write) &&
--			 (frames_written > 0))
--			audio_batch_frames_max = frames_written;
--
--		num_frames -= frames_to_write;
--		audio_out_buffer_ptr += frames_to_write << 1;
--	}
--}
--
--void WriteSample(s16 r, s16 l)
--{
--	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
--
--	if (drop_samples)
--		return;
--
--	if (audio_buffer.size() < audio_buffer_idx + 2)
--	{
--		/* Audio buffer overflow...
--		 * > Drop any existing samples
--		 * > Drop any future samples until the next
--		 *   call of retro_audio_upload() */
--		audio_buffer_idx = 0;
--		drop_samples = true;
--		return;
--	}
--
--	audio_buffer[audio_buffer_idx++] = l;
--	audio_buffer[audio_buffer_idx++] = r;
--}
--
--void InitAudio()
--{
--}
--
--void TermAudio()
--{
--}
--
--void StartAudioRecording(bool eight_khz)
--{
--}
--
--u32 RecordAudio(void *buffer, u32 samples)
--{
--	return 0;
--}
--
--void StopAudioRecording()
--{
--}
-+/*
-+    This file is part of Flycast.
-+
-+    Flycast is free software: you can redistribute it and/or modify
-+    it under the terms of the GNU General Public License as published by
-+    the Free Software Foundation, either version 2 of the License, or
-+    (at your option) any later version.
-+
-+    Flycast is distributed in the hope that it will be useful,
-+    but WITHOUT ANY WARRANTY; without even the implied warranty of
-+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+    GNU General Public License for more details.
-+
-+    You should have received a copy of the GNU General Public License
-+    along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
-+ */
-+#include "types.h"
-+#include "cfg/option.h"
-+#include "audio/audiostream.h"
-+#include "emulator.h"
-+
-+#include <libretro.h>
-+
-+#include <vector>
-+#include <mutex>
-+
-+/* Detect output refresh rate changes by monitoring
-+ * the last 'VSYNC_SWAP_INTERVAL_FRAMES' frames:
-+ * - Measure average (mean) audio samples per upload
-+ *   operation
-+ * - Determine vsync swap interval based on
-+ *   expected samples at 60 (or 50) Hz
-+ * - Check that vsync swap interval remains
-+ *   'stable' for at least 'VSYNC_SWAP_INTERVAL_FRAMES' */
-+#define VSYNC_SWAP_INTERVAL_FRAMES 6
-+/* Calculated swap interval is 'valid' if it is
-+ * within 'VSYNC_SWAP_INTERVAL_THRESHOLD' of an integer
-+ * value */
-+#define VSYNC_SWAP_INTERVAL_THRESHOLD 0.05f
-+
-+extern bool setAVInfo(retro_system_av_info& avinfo);
-+
-+extern retro_environment_t        environ_cb;
-+extern retro_audio_sample_batch_t audio_batch_cb;
-+
-+extern float libretro_expected_audio_samples_per_run;
-+extern unsigned libretro_vsync_swap_interval;
-+extern bool libretro_detect_vsync_swap_interval;
-+
-+static float audio_samples_per_frame_avg;
-+static unsigned vsync_swap_interval_last;
-+static unsigned vsync_swap_interval_conter;
-+
-+static std::mutex audio_buffer_mutex;
-+static std::vector<int16_t> audio_buffer;
-+static size_t audio_buffer_idx;
-+static size_t audio_batch_frames_max;
-+static bool drop_samples = true;
-+
-+static int16_t *audio_out_buffer = nullptr;
-+
-+void retro_audio_init(void)
-+{
-+	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-+
-+	/* Worst case is 25 fps content with an audio sample rate
-+	 * of 44.1 kHz -> 1764 stereo samples
-+	 * But flycast can stop rendering for arbitrary lengths of
-+	 * time, leading to multiple 'frames' worth of audio being
-+	 * uploaded in retro_run(). We therefore require some leniency,
-+	 * but must limit the total number of samples that can be
-+	 * uploaded since the libretro frontend can 'hang' if too
-+	 * many samples are sent during a single call of retro_run().
-+	 * We therefore (arbitrarily) choose to allow up to 10 frames
-+	 * worth of 'worst case' stereo samples... */
-+	size_t audio_buffer_size = (44100 / 25) * 2 * 10;
-+
-+	audio_buffer.resize(audio_buffer_size);
-+	audio_buffer_idx = 0;
-+	audio_batch_frames_max = std::numeric_limits<size_t>::max();
-+
-+	audio_out_buffer = (int16_t*)malloc(audio_buffer_size * sizeof(int16_t));
-+
-+	drop_samples = false;
-+
-+	audio_samples_per_frame_avg = 0.0f;
-+	vsync_swap_interval_last = 1;
-+	vsync_swap_interval_conter = 0;
-+}
-+
-+void retro_audio_deinit(void)
-+{
-+	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-+
-+	audio_buffer.clear();
-+	audio_buffer_idx = 0;
-+
-+	if (audio_out_buffer != nullptr)
-+		free(audio_out_buffer);
-+
-+	audio_out_buffer = nullptr;
-+
-+	drop_samples = true;
-+
-+	audio_samples_per_frame_avg = 0.0f;
-+	vsync_swap_interval_last = 1;
-+	vsync_swap_interval_conter = 0;
-+}
-+
-+void retro_audio_flush_buffer(void)
-+{
-+	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-+	audio_buffer_idx = 0;
-+
-+	/* We are manually 'resetting' the audio buffer
-+	 * -> any 'drop samples' lock can be released */
-+	drop_samples = false;
-+}
-+
-+void retro_audio_upload(void)
-+{
-+	audio_buffer_mutex.lock();
-+
-+	for (size_t i = 0; i < audio_buffer_idx; i++)
-+		audio_out_buffer[i] = audio_buffer[i];
-+
-+	size_t num_frames = audio_buffer_idx >> 1;
-+	audio_buffer_idx = 0;
-+
-+	/* Uploading audio 'resets' the audio buffer
-+	 * -> any 'drop samples' lock can be released */
-+	drop_samples = false;
-+
-+	audio_buffer_mutex.unlock();
-+
-+	/* Attempt to detect changes in output refresh rate */
-+	if (libretro_detect_vsync_swap_interval &&
-+	    (num_frames > 0))
-+	{
-+		/* Simple running average (leaky-integrator) */
-+		audio_samples_per_frame_avg = ((1.0f / (float)VSYNC_SWAP_INTERVAL_FRAMES) * (float)num_frames) +
-+				((1.0f - (1.0f / (float)VSYNC_SWAP_INTERVAL_FRAMES)) * audio_samples_per_frame_avg);
-+
-+		float swap_ratio = audio_samples_per_frame_avg /
-+				libretro_expected_audio_samples_per_run;
-+		unsigned swap_integer;
-+		float swap_remainder;
-+
-+		/* If internal frame rate is equal to (within threshold)
-+		 * or higher than the default 60 (or 50) Hz, fall back
-+		 * to a swap interval of 1 */
-+		if (swap_ratio < (1.0f + VSYNC_SWAP_INTERVAL_THRESHOLD))
-+		{
-+			swap_integer = 1;
-+			swap_remainder = 0.0f;
-+		}
-+		else
-+		{
-+			swap_integer = (unsigned)(swap_ratio + 0.5f);
-+			swap_remainder = swap_ratio - (float)swap_integer;
-+			swap_remainder = (swap_remainder < 0.0f) ?
-+					-swap_remainder : swap_remainder;
-+		}
-+
-+		/* > Swap interval is considered 'valid' if it is
-+		 *   within VSYNC_SWAP_INTERVAL_THRESHOLD of an integer
-+		 *   value
-+		 * > If valid, check if new swap interval differs from
-+		 *   previously logged value */
-+		if ((swap_remainder <= VSYNC_SWAP_INTERVAL_THRESHOLD) &&
-+			 (swap_integer != libretro_vsync_swap_interval))
-+		{
-+			vsync_swap_interval_conter =
-+					(swap_integer == vsync_swap_interval_last) ?
-+							(vsync_swap_interval_conter + 1) : 0;
-+
-+			/* Check whether swap interval is 'stable' */
-+			if (vsync_swap_interval_conter >= VSYNC_SWAP_INTERVAL_FRAMES)
-+			{
-+				libretro_vsync_swap_interval = swap_integer;
-+				vsync_swap_interval_conter = 0;
-+
-+				/* Notify frontend */
-+				retro_system_av_info avinfo;
-+				setAVInfo(avinfo);
-+				environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &avinfo);
-+			}
-+
-+			vsync_swap_interval_last = swap_integer;
-+		}
-+		else
-+			vsync_swap_interval_conter = 0;
-+	}
-+
-+	int16_t *audio_out_buffer_ptr = audio_out_buffer;
-+	while (num_frames > 0)
-+	{
-+		size_t frames_to_write = (num_frames > audio_batch_frames_max) ?
-+				audio_batch_frames_max : num_frames;
-+		size_t frames_written = audio_batch_cb(audio_out_buffer_ptr,
-+				frames_to_write);
-+
-+		if ((frames_written < frames_to_write) &&
-+			 (frames_written > 0))
-+			audio_batch_frames_max = frames_written;
-+
-+		num_frames -= frames_to_write;
-+		audio_out_buffer_ptr += frames_to_write << 1;
-+	}
-+}
-+
-+// Stereo frames waiting for the next retro_run() (the threaded AICA paces on it)
-+size_t retro_audio_buffered_frames()
-+{
-+	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-+	return audio_buffer_idx >> 1;
-+}
-+
-+void WriteSample(s16 r, s16 l)
-+{
-+	const std::lock_guard<std::mutex> lock(audio_buffer_mutex);
-+
-+	if (drop_samples)
-+		return;
-+
-+	if (audio_buffer.size() < audio_buffer_idx + 2)
-+	{
-+		/* Audio buffer overflow...
-+		 * > Drop any existing samples
-+		 * > Drop any future samples until the next
-+		 *   call of retro_audio_upload() */
-+		audio_buffer_idx = 0;
-+		drop_samples = true;
-+		return;
-+	}
-+
-+	audio_buffer[audio_buffer_idx++] = l;
-+	audio_buffer[audio_buffer_idx++] = r;
-+}
-+
-+void InitAudio()
-+{
-+}
-+
-+void TermAudio()
-+{
-+}
-+
-+void StartAudioRecording(bool eight_khz)
-+{
-+}
-+
-+u32 RecordAudio(void *buffer, u32 samples)
-+{
-+	return 0;
-+}
-+
-+void StopAudioRecording()
-+{
-+}
 diff -ruN a/shell/libretro/libretro.cpp b/shell/libretro/libretro.cpp
---- a/shell/libretro/libretro.cpp	2026-10-05 17:50:46.124895255 +0300
-+++ b/shell/libretro/libretro.cpp	2026-10-05 17:50:46.124895255 +0300
+--- a/shell/libretro/libretro.cpp	2026-10-06 23:01:07.223178180 +0300
++++ b/shell/libretro/libretro.cpp	2026-10-06 23:01:07.227508477 +0300
 @@ -60,6 +60,7 @@
  #include "hw/maple/maple_if.h"
  #include "hw/pvr/pvr_regs.h"
@@ -806,8 +326,8 @@ diff -ruN a/shell/libretro/libretro.cpp b/shell/libretro/libretro.cpp
  	unsigned previous_per_content_vmus = per_content_vmus;
  	per_content_vmus = 0;
 diff -ruN a/shell/libretro/libretro_core_options.h b/shell/libretro/libretro_core_options.h
---- a/shell/libretro/libretro_core_options.h	2026-10-05 17:50:46.124895255 +0300
-+++ b/shell/libretro/libretro_core_options.h	2026-10-05 17:50:46.124895255 +0300
+--- a/shell/libretro/libretro_core_options.h	2026-10-06 23:01:07.223178180 +0300
++++ b/shell/libretro/libretro_core_options.h	2026-10-06 23:01:07.227508477 +0300
 @@ -645,6 +645,20 @@
        "enabled",
     },

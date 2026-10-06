@@ -1017,3 +1017,43 @@ another core. The AICA (its ARM7 + sample generation) ran in lockstep with the S
   24.8% of a core in a race (11.8% in the attract demo), the SH4 thread no longer carrying it.
   Temperatures 47–51 °C. **The user: "sound is smooth now, game feels like running @ full speed".**
 - Note: with this on, the audio speed meter measures the audio output, not the emulation speed.
+
+**0007 fix: the SH4 must throttle itself when the AICA is threaded.** The user timed MSR's lap clock:
+10 game seconds in 8 real ones with 0007 (125%), and ~5 with the MSR fix below. In lockstep, the
+frontend's audio sync was what held the SH4 to real time (it blocks once the audio buffers are
+full). With the AICA on the wall clock nothing did. A game with spare CPU (and frame skipping on)
+ran ahead, and since its sounds are triggered by the game, they stayed in sync with the
+too-fast picture. Now AicaUpdate, on the SH4 side, keeps emulated time (one tick = one 44.1 kHz
+sample, checked every 64) within 50 ms of the wall clock, sleeping when ahead. Behind it there is
+nothing to make up, so slow games just run slow with the sound at the right rate. MSR after the fix:
+SH4 thread 48.7% of a core (it sleeps the rest), lap clock correct, sound right.
+- **Also fixed in 0007: a broken patch.** `shell/libretro/audiostream.cpp` is the only CRLF file
+  among those patched. The first 0007 rewrote it with LF (a whole-file hunk), and git's LF
+  normalisation then stripped the patch's CRs, so on a pristine source it would no longer apply.
+  It went unnoticed because the build tree had already been converted. 0007 no longer touches that
+  file: its extra "frontend stopped taking audio" pause was redundant, since with threaded
+  rendering the SH4, and so the AICA heartbeat, stops anyway. **Check:** all of 0001–0008 were
+  applied with `patch` to a fresh extract of the tarball, file-identical to the build tree.
+
+**0008 (Flycast): per-game idle-loop hints. MSR now runs at full speed.** In a race, Metropolis
+Street Racer spends ~55% of the SH4 thread waiting for an event flag. The loop (8c12b980-8c12b9b0)
+calls an event dispatcher every spin; the dispatcher indexes a callback table, and the callback
+is empty. 0001's static check rejects it because it only allows calls to `rts; nop`.
+- A general version (following calls, using register values at compile time, allowing stores on
+  the "event arrived" path) did catch it. But while it was installed the user heard bad sound in
+  Sega Rally 2 and V-Rally, and Cosmic Smash and Stupid Invaders disc 1 each exited once in a
+  sweep (not reproducible in single runs). It was dropped.
+- What shipped instead is a list of measured loops: game ID, exact range and first opcode.
+  Listed loops get the same treatment as detected ones: the back-edge block is charged a
+  timeslice, and nothing is skipped. Trap: the game IDs in `/tmp/retroarch_verbose.log` are from
+  several sessions; MSR is **MK-51012** (MK-51019 is Sega Rally 2). The first hint used the wrong one.
+- The same patch adds `FLYCAST_THREADED_AUDIO=0`, which forces the lockstep AICA so the audio meter
+  shows the emulation speed again (benchmarks).
+- Sega Rally 2 has no such loop: in a race its hottest block is 3.1% of the thread, all real work.
+  It runs at **~67%** by the user's stopwatch (10 game seconds in ~15 real), with smooth sound. The
+  only lever left is the per-game SH4 clock option (120 MHz gave 93–101% in the demo), which the
+  user has not chosen.
+- The user then tried the other direction on Sega Rally 2 (game-specific options): **SH4 overclocked
+  to 250 MHz with frame skipping 3: 10 game seconds in ~13 real (~77%)**, up from ~15 at stock 200 MHz
+  and frame skip 2. Plausibly the game's own logic runs per rendered frame: more SH4 cycles per
+  emulated frame let it finish its frame work, and the extra skipped frames cut rendering work.
