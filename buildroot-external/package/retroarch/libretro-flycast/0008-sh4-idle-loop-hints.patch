@@ -1,5 +1,5 @@
 From: RetroOPI_Z3
-Subject: [PATCH] sh4 dynarec: per-game idle loop hints (Metropolis Street Racer)
+Subject: [PATCH] sh4 dynarec: per-game idle loop hints (MSR, Test Drive V-Rally)
 
 Metropolis Street Racer waits for an event flag in a loop that calls an
 event dispatcher every spin (table -> empty callback): ~55% of the SH4
@@ -9,14 +9,15 @@ that followed calls changed timing in other games (bad sound reported in
 Sega Rally 2 and V-Rally while it was installed), so this is a list of
 measured loops instead: game ID, exact loop range and first opcode.
 Listed loops get the same treatment as detected ones (the back-edge
-block is charged a timeslice; nothing is skipped).
+block is charged a timeslice; nothing is skipped). Test Drive V-Rally
+waits in the same loop (same library), ~23% of the SH4 thread.
 FLYCAST_THREADED_AUDIO=0 forces the lockstep AICA (0007), so that the
 audio speed meter shows the emulation speed again for benchmarks.
 
 diff -ruN a/core/hw/sh4/dyna/decoder.cpp b/core/hw/sh4/dyna/decoder.cpp
---- a/core/hw/sh4/dyna/decoder.cpp	2026-10-06 23:03:21.722606546 +0300
-+++ b/core/hw/sh4/dyna/decoder.cpp	2026-10-06 23:03:21.726808904 +0300
-@@ -1175,6 +1175,31 @@
+--- a/core/hw/sh4/dyna/decoder.cpp	2026-10-06 23:22:52.299606811 +0300
++++ b/core/hw/sh4/dyna/decoder.cpp	2026-10-06 23:22:52.303940145 +0300
+@@ -1175,6 +1175,34 @@
  	return (anyWritten & readFirst) == 0;
  }
  
@@ -34,6 +35,9 @@ diff -ruN a/core/hw/sh4/dyna/decoder.cpp b/core/hw/sh4/dyna/decoder.cpp
 +	// dispatcher (table -> empty callback) every spin: ~55% of the SH4 thread
 +	// in a race.
 +	{ "MK-51012", 0x8c12b980, 0x8c12b9b0, 0x4a0b },
++	// Test Drive V-Rally: the same event wait (same library), ~23% of the
++	// SH4 thread in a race.
++	{ "T15110N", 0x8c211200, 0x8c211230, 0x4a0b },
 +};
 +
 +static bool idleLoopHinted(u32 start, u32 end)
@@ -48,7 +52,7 @@ diff -ruN a/core/hw/sh4/dyna/decoder.cpp b/core/hw/sh4/dyna/decoder.cpp
  bool dec_DecodeBlock(RuntimeBlockInfo* rbi,u32 max_cycles)
  {
  	blk=rbi;
-@@ -1294,7 +1319,8 @@
+@@ -1294,7 +1322,8 @@
  	if ((blk->BlockType == BET_Cond_0 || blk->BlockType == BET_Cond_1 || blk->BlockType == BET_StaticJump)
  			&& blk->BranchBlock != NullAddress && blk->BranchBlock <= blk->vaddr
  			&& blk->vaddr - blk->BranchBlock <= 64 && idleSkipEnabled()
@@ -59,8 +63,8 @@ diff -ruN a/core/hw/sh4/dyna/decoder.cpp b/core/hw/sh4/dyna/decoder.cpp
  		NOTICE_LOG(DYNAREC, "Idle loop %08x-%08x: back-edge block %08x charged %d cycles (was %d)",
  				blk->BranchBlock, blk->vaddr + blk->sh4_code_size, blk->vaddr, SH4_TIMESLICE, blk->guest_cycles);
 diff -ruN a/shell/libretro/libretro.cpp b/shell/libretro/libretro.cpp
---- a/shell/libretro/libretro.cpp	2026-10-06 23:03:21.726808904 +0300
-+++ b/shell/libretro/libretro.cpp	2026-10-06 23:03:21.726808904 +0300
+--- a/shell/libretro/libretro.cpp	2026-10-06 23:22:52.303940145 +0300
++++ b/shell/libretro/libretro.cpp	2026-10-06 23:22:52.303940145 +0300
 @@ -871,6 +871,10 @@
  	var.key = CORE_OPTION_NAME "_threaded_audio";
  	aica::threadedOption = !(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value

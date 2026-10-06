@@ -1057,3 +1057,9 @@ is empty. 0001's static check rejects it because it only allows calls to `rts; n
   to 250 MHz with frame skipping 3: 10 game seconds in ~13 real (~77%)**, up from ~15 at stock 200 MHz
   and frame skip 2. Plausibly the game's own logic runs per rendered frame: more SH4 cycles per
   emulated frame let it finish its frame work, and the extra skipped frames cut rendering work.
+- **Test Drive V-Rally (T15110N)** waits in the same loop as MSR, the same library code byte for
+  byte at 8c211200-8c211230, with the same table dispatcher (8c22bc20). That was ~23% of the SH4
+  thread. It already ran at full speed under the brake (user: 10 game seconds = 10 real). With the
+  hint the SH4 thread drops from 92.3% to 74.8% of a core, giving headroom for busy scenes. The
+  user confirmed lap clock and sound. The earlier "bad sound in V-Rally" with the general analyzer
+  was most likely this loop being skipped before the throttle existed, i.e. the game running fast.
