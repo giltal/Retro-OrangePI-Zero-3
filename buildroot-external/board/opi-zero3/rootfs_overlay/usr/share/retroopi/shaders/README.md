@@ -19,6 +19,8 @@ Defaults (RetroArch folder presets in `/root/.config/retroarch/config/`):
 |---|---|---|
 | `gb`, `gbc` (Gambatte) | `xbr-lv2-2x-mp` | 100.5%, 60 fps, GPU 172% |
 | `atari800` (Atari800; 800 and 5200) | `hq2x-smooth` | 100.0%, 59.9 fps, GPU 123%; ~336×240 source, no 16-bit needed |
+| `atari2600` (Stella 2023) | `hq2x-smooth` (the user's choice) | not measured; a 160×~210 source, smaller than the Atari 800's, which runs it at full speed |
+| `nes` (FCEUmm) | `hq2x-smooth` (the user's choice) | not measured; a 256×240 source, smaller than the Atari 800's |
 | `gba` (gpSP) | `hq2x-halphon-mp` (the user's choice) | 99.0%, 59.0 fps, GPU saturated: about one dropped frame per second, accepted for the look. highp was 89.7%, 54 fps. A 16-bit final stretch pass gained nothing (99.0%), so the stock pass stays. For comparison: hq2x-smooth 100.5%, 60 fps, GPU 72%; xBR-lv2 2× mediump too heavy, 72.6%, GPU 199% (240×160 is 2.7× the Game Boy's pixels) |
 
 ## Why these settings
