@@ -1126,3 +1126,17 @@ serial console attached.
 - Verified: boots the LZ4 label (no marker in `/proc/cmdline`). **Stopwatch: 9 s** (the user, a
   `reboot` including shutdown), from "under 10 s"; ~14 s at the start of the pass. Kernel side
   unchanged: init 2.57 s, menu ~4.45 s.
+
+### Boot: `quiet loglevel=4` (~7 s)
+
+Bring-up had left the kernel at `loglevel=7` (verbose on purpose, see extlinux.conf), so ~1,000
+lines went to the 115200-baud serial console and scrolled on the TV through fbcon. Now
+`quiet loglevel=4` in both labels; `dmesg` still has the full log. Three reboots:
+**init 2.57 → 0.88 s**, launcher start 3.7 → 2.24–2.29 s, menu ~4.45 → ~3.1 s kernel time.
+**Stopwatch: 7 s** (the user, a `reboot`).
+
+The boot-time pass so far, by stopwatch: **~14 s → 7 s.** Left, by size:
+- before the kernel: SPL/DRAM and U-Boot, now reading 19.4 MB;
+- udev 0.8 s, ALSA 0.35 s;
+- the launcher's ~0.8 s (DRM 170 ms, fonts 190 ms, input 140 ms);
+- 0.88 s of kernel init.
