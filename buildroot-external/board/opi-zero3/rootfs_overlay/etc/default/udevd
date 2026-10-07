@@ -1,0 +1,12 @@
+# Read by Buildroot's /etc/init.d/S10udevd.
+#
+# Don't block the boot on "udevadm settle". The coldplug replays ~494 events,
+# and waiting for all of them took ~0.5 s of every boot, but nothing behind S10
+# needs udev to have finished: devtmpfs already has /dev/dri, /dev/input and
+# /dev/snd once the (built-in) drivers probe, and the launcher picks up a
+# gamepad that appears after it starts (input_poll() re-scans). udev keeps
+# processing the events in the background. Measured over three reboots:
+# S10udevd 0.73 -> 0.22 s, launcher started at 2.27 -> 1.94 s (S11alsa,
+# now overlapping udev, 0.28 -> 0.43 s). The boot log then says
+# "udevadm settle failed", which is expected.
+SETTLE_TIMEOUT=0

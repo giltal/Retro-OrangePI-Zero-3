@@ -1140,3 +1140,19 @@ The boot-time pass so far, by stopwatch: **~14 s → 7 s.** Left, by size:
 - udev 0.8 s, ALSA 0.35 s;
 - the launcher's ~0.8 s (DRM 170 ms, fonts 190 ms, input 140 ms);
 - 0.88 s of kernel init.
+
+### Boot: don't wait for udev to settle (~6 s)
+
+S10udevd took 0.73 s: start 0.16 s, triggers 0.05 s (494 device events), **`udevadm settle` 0.58 s**.
+The modules udev autoloads (crypto engine, watchdog, CEC, display connector) are done by 1.70 s.
+The kernel then logs nothing until settle ends at ~2.0 s: that is udev's own per-event work.
+Nothing behind S10 needs it finished. devtmpfs already has `/dev/dri`, `/dev/input` and `/dev/snd`
+(built-in drivers), and the launcher's `input_poll()` re-scans for a gamepad that arrives later;
+on most boots the USB PS3 pad enumerates just after the launcher starts anyway.
+`rootfs_overlay/etc/default/udevd` sets `SETTLE_TIMEOUT=0` (read by Buildroot's stock S10udevd), so
+udev finishes in the background. Three reboots: S10udevd 0.73 → 0.22 s, S11alsa 0.28 → 0.43 s (it now
+overlaps udev), **launcher start 2.27 → 1.94 s**. The gamepad was found and both sound cards and
+`Master` were present every time. **Stopwatch: ~6 s.**
+
+Boot-time pass, power-on to menu by stopwatch: **~14 s → ~6 s**. Kernel side, the menu is ready
+~2.7 s after kernel entry (from ~7.2 s).
