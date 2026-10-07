@@ -1176,7 +1176,7 @@ static int gfx_init(void)
         fprintf(stderr, "GFX: no symbol font %s -- UI symbols will show as boxes\n",
                 SYMBOL_FONT_PATH);
 
-    int img_flags = IMG_INIT_PNG;
+    int img_flags = IMG_INIT_PNG | IMG_INIT_JPG;   /* JPG: the cover-art thumbnails */
     if (!(IMG_Init(img_flags) & img_flags)) {
         fprintf(stderr, "GFX: IMG_Init failed: %s\n", IMG_GetError());
         /* Non-fatal: thumbnails won't work */
@@ -2949,6 +2949,108 @@ static const PixelIcon *menu_entry_icon(const MenuEntry *e)
     return e->system_idx >= 0 ? icon_find(g_systems[e->system_idx].dir_name) : NULL;
 }
 
+/* =========================================================================
+ * Cover-art preview (ROM lists)
+ *
+ * scripts/fetch-thumbnails.py puts one JPEG per game on the card:
+ *     /opt/roms/_system/thumbnails/<system folder>/<game>.jpg
+ * where <game> is the ROM's file name without its extension, or the folder's
+ * name for a game kept in its own folder (a Dreamcast GDI set). The ROM lists
+ * show the selected game's in a panel on the right; a game without one shows
+ * its console's icon there instead.
+ * ========================================================================= */
+
+#define THUMBS_DIR  DATA_DIR "/thumbnails"
+#define PREVIEW_W   (SCREEN_WIDTH * 2 / 5)
+
+static bool preview_shown(void)
+{
+    return g_menu.mode == MENU_ROMS || g_menu.mode == MENU_FAVORITES ||
+           g_menu.mode == MENU_RECENTS;
+}
+
+/* "<system folder>/<game>" for a ROM path under ROMS_PATH, or false. */
+static bool thumb_key(const char *path, char *out, size_t n)
+{
+    size_t rl = strlen(ROMS_PATH);
+    if (strncmp(path, ROMS_PATH "/", rl + 1) != 0) return false;
+    const char *rel = path + rl + 1;             /* "snes/Game (USA).sfc" */
+    const char *s1 = strchr(rel, '/');
+    if (!s1) return false;
+    const char *s2 = strchr(s1 + 1, '/');
+    int len;
+    if (s2) {
+        len = (int)(s2 - rel);                   /* "dreamcast/Game" (a game folder) */
+    } else {
+        const char *dot = strrchr(s1 + 1, '.');
+        len = dot ? (int)(dot - rel) : (int)strlen(rel);
+    }
+    snprintf(out, n, "%.*s", len, rel);
+    return true;
+}
+
+static SDL_Surface *g_preview;          /* the selected game's art, fitted to the panel */
+static char g_preview_key[MAX_NAME];    /* whose art g_preview is ("" = none tried yet) */
+
+/* Loads (once per selection) and scales the art for key into g_preview. */
+static void preview_load(const char *key, int box_w, int box_h)
+{
+    if (strcmp(key, g_preview_key) == 0) return;
+    snprintf(g_preview_key, sizeof(g_preview_key), "%s", key);
+    SDL_FreeSurface(g_preview);
+    g_preview = NULL;
+    if (!key[0]) return;
+
+    char path[MAX_NAME * 2];
+    snprintf(path, sizeof(path), "%s/%s.jpg", THUMBS_DIR, key);
+    if (access(path, R_OK) != 0)
+        snprintf(path, sizeof(path), "%s/%s.png", THUMBS_DIR, key);
+    SDL_Surface *src = IMG_Load(path);
+    if (!src) return;                            /* no art: the icon is drawn instead */
+    SDL_Surface *conv = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
+    SDL_FreeSurface(src);
+    if (!conv) return;
+    /* Fit inside the box, keeping the aspect ratio */
+    int w = box_w, h = conv->h * box_w / conv->w;
+    if (h > box_h) {
+        h = box_h;
+        w = conv->w * box_h / conv->h;
+    }
+    g_preview = SDL_CreateRGBSurface(0, w, h, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+    if (g_preview) {
+        SDL_SetSurfaceBlendMode(conv, SDL_BLENDMODE_NONE);
+        SDL_BlitScaled(conv, NULL, g_preview, NULL);
+    }
+    SDL_FreeSurface(conv);
+}
+
+static void ui_draw_preview(void)
+{
+    if (!preview_shown() || g_menu.count == 0) return;
+    int pad = UI_SCALE(8);
+    int x0 = SCREEN_WIDTH - PREVIEW_W, y0 = LIST_TOP + pad;
+    int w = PREVIEW_W - PADDING_X, h = LIST_BOTTOM - y0 - pad;
+    gfx_fill_rect(x0, y0, w, h, COL_HEADER_BG);
+
+    MenuEntry *e = &g_menu.entries[g_menu.selected];
+    char key[MAX_NAME];
+    if (!thumb_key(e->path, key, sizeof(key)))
+        key[0] = '\0';
+    int box_w = w - 2 * pad, box_h = h - 2 * pad;
+    preview_load(key, box_w, box_h);
+
+    if (g_preview) {
+        gfx_blit_surface(g_preview, x0 + (w - g_preview->w) / 2, y0 + (h - g_preview->h) / 2);
+    } else if (e->system_idx >= 0) {
+        const PixelIcon *ic = icon_find(g_systems[e->system_idx].dir_name);
+        if (ic) {
+            int scale = (box_w < box_h ? box_w : box_h) / 2 / ic->size;
+            if (scale < 1) scale = 1;
+            gfx_draw_icon(ic, x0 + (w - ic->size * scale) / 2, y0 + (h - ic->size * scale) / 2, scale);
+        }
+    }
+}
+
 /* Settings items' icons, in SettingItem order. */
 static const char *setting_icons[SETTING_COUNT] = {
     "theme", "volume", "n64quality", "favorites", "recents", "clearrecent", "restart", "poweroff",
@@ -2956,6 +3058,8 @@ static const char *setting_icons[SETTING_COUNT] = {
 
 static void ui_draw_list(void)
 {
+    /* The list ends where the cover-art panel starts (ROM lists only) */
+    int list_w = preview_shown() ? SCREEN_WIDTH - PREVIEW_W : SCREEN_WIDTH;
     int visible = MAX_VISIBLE;
     if (g_menu.count < visible) visible = g_menu.count;
 
@@ -2970,7 +3074,7 @@ static void ui_draw_list(void)
         MenuEntry *e = &g_menu.entries[idx];
         int y = LIST_TOP + i * ITEM_HEIGHT;
         int text_y = y + (ITEM_HEIGHT - FONT_SIZE_LIST) / 2;
-        int text_max_w = SCREEN_WIDTH - 2 * PADDING_X - UI_SCALE(8);
+        int text_max_w = list_w - 2 * PADDING_X - UI_SCALE(8);
 
         /* Reserve space for star icon on ROM entries */
         bool show_star = (g_menu.mode == MENU_ROMS || g_menu.mode == MENU_FAVORITES ||
@@ -2981,7 +3085,7 @@ static void ui_draw_list(void)
 
         if (idx == g_menu.selected) {
             /* Highlighted selection pill */
-            gfx_draw_pill(PADDING_X - UI_SCALE(8), y + UI_SCALE(2), SCREEN_WIDTH - 2 * PADDING_X + UI_SCALE(16),
+            gfx_draw_pill(PADDING_X - UI_SCALE(8), y + UI_SCALE(2), list_w - 2 * PADDING_X + UI_SCALE(16),
                           ITEM_HEIGHT - UI_SCALE(4), COL_HIGHLIGHT);
         }
 
@@ -3011,7 +3115,7 @@ static void ui_draw_list(void)
 
         /* Favorite star (filled polygon) */
         if (show_star) {
-            gfx_draw_star(SCREEN_WIDTH - PADDING_X - UI_SCALE(12),
+            gfx_draw_star(list_w - PADDING_X - UI_SCALE(12),
                           text_y + FONT_SIZE_LIST / 2 + 1,
                           UI_SCALE(9), UI_SCALE(4), COL_STAR);
         }
@@ -3037,7 +3141,7 @@ static void ui_draw_list(void)
                 int tw;
                 TTF_SizeUTF8(g_font_small, val_str, &tw, NULL);
                 gfx_draw_text(g_font_small, val_str,
-                              SCREEN_WIDTH - PADDING_X - tw - UI_SCALE(8), text_y + UI_SCALE(3),
+                              list_w - PADDING_X - tw - UI_SCALE(8), text_y + UI_SCALE(3),
                               COL_SYSTEM_ICON, 0);
             }
         }
@@ -3045,7 +3149,7 @@ static void ui_draw_list(void)
         /* Divider line */
         if (idx != g_menu.selected && (idx + 1) != g_menu.selected) {
             gfx_fill_rect(PADDING_X, y + ITEM_HEIGHT - 1,
-                          SCREEN_WIDTH - 2 * PADDING_X, 1, COL_DIVIDER);
+                          list_w - 2 * PADDING_X, 1, COL_DIVIDER);
         }
     }
 
@@ -3062,8 +3166,8 @@ static void ui_draw_list(void)
         if (thumb_h < 10) thumb_h = 10;
         int thumb_y = LIST_TOP + (g_menu.scroll_top * (track_h - thumb_h))
                       / (g_menu.count - MAX_VISIBLE);
-        gfx_fill_rect(SCREEN_WIDTH - UI_SCALE(4), LIST_TOP, UI_SCALE(3), track_h, COL_HEADER_BG);
-        gfx_fill_rect(SCREEN_WIDTH - UI_SCALE(4), thumb_y, UI_SCALE(3), thumb_h, COL_HIGHLIGHT);
+        gfx_fill_rect(list_w - UI_SCALE(4), LIST_TOP, UI_SCALE(3), track_h, COL_HEADER_BG);
+        gfx_fill_rect(list_w - UI_SCALE(4), thumb_y, UI_SCALE(3), thumb_h, COL_HIGHLIGHT);
     }
 }
 
@@ -3111,6 +3215,7 @@ static void ui_draw(void)
     }
     ui_draw_header(title);
     ui_draw_list();
+    ui_draw_preview();
     ui_draw_footer();
     ui_draw_jump_hint();
 

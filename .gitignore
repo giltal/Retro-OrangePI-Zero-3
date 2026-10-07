@@ -15,3 +15,6 @@ backup/
 # NOTE: buildroot-external/package/retroarch/retroarch/retro-assets IS tracked
 # deliberately -- retroarch.mk copies it into the target, so it is a build
 # input, not an output.
+
+# Cover art fetched by scripts/fetch-thumbnails.py (publishers' artwork, never committed)
+scripts/thumbnails-cache/

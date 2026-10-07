@@ -1192,3 +1192,29 @@ The user asked for console icons (searched for on the web) and an invader ship i
 - **Launcher:** `gfx_draw_icon()` draws each pixel as a scale x scale block, nearest neighbour.
   The systems and Settings lists get an icon column, which moves the names right; the ship sits
   before "RETRO LAUNCHER". Startup is unchanged (~230 ms ready on a restart).
+
+### Launcher: cover-art preview panel, and a script to fetch the art
+
+The ROM lists (a system's games, Favorites, Recently Played) now have a panel on the right (40%
+of the width) showing the selected game's cover art, fitted with its aspect kept. A game with
+none shows its console's pixel icon there. The art is decoded only when the selection changes.
+- **The art: `scripts/fetch-thumbnails.py`** (Windows python, for Pillow; it reaches the board
+  through `board.sh` with `wsl -e`, since plain `wsl bash ...` runs the arguments through a shell
+  that expanded the `$variables` meant for the board).
+  - It reads the card's game list and matches each game on thumbnails.libretro.com: Named_Boxarts,
+    then Named_Titles, then Named_Snaps. The match is exact, then the bare title (preferring the
+    game's region), then a title prefix. Arcade short names go through the launcher's name tables.
+  - It shrinks each image to fit 512x512 as JPEG and uploads it to
+    `/opt/roms/_system/thumbnails/<system>/<game>.jpg`. A local cache, `scripts/thumbnails-cache/`
+    (git-ignored, publishers' artwork), makes re-runs fetch only what is missing.
+  - Run with the user's go-ahead: **2,539 of 2,905 games matched**, 838 MB downloaded, 2,537 JPEGs
+    on the card. That is 135 MB of data but **320 MB on the card**: exFAT's 128 KB clusters make
+    every small file take at least one cluster.
+  - Misses are hand-named files: the numbered and loosely translated PC Engine and PlayStation
+    packs, and some SNES/GBA names. The list is in `thumbnails-cache/unmatched.txt`.
+- **Pitfall: SDL2_image had no JPEG decoder.** Buildroot passes `--enable-jpg` only when the jpeg
+  package is selected, and nothing selected it, so every JPEG failed silently and the panel showed
+  icons only. The library even contained "JPEG images are not supported". The launcher package now
+  `select`s `BR2_PACKAGE_JPEG` (next to its existing `select BR2_PACKAGE_LIBPNG`, for the same
+  reason). SDL2_image decodes with its built-in stb_image (`LOAD_JPG=1`), so it gains no runtime
+  dependency.

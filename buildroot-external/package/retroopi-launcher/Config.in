@@ -8,6 +8,9 @@ config BR2_PACKAGE_RETROOPI_LAUNCHER
 	# sdl2_image only builds PNG support if libpng is selected, and the
 	# launcher hard-fails on IMG_Init(IMG_INIT_PNG).
 	select BR2_PACKAGE_LIBPNG
+	# Likewise JPEG (--enable-jpg only with the jpeg package): the cover-art
+	# thumbnails are JPEG, and without it every one failed to load silently.
+	select BR2_PACKAGE_JPEG
 	select BR2_PACKAGE_FREETYPE
 	select BR2_PACKAGE_ZLIB  # PSP titles from compressed .cso images
 	help
