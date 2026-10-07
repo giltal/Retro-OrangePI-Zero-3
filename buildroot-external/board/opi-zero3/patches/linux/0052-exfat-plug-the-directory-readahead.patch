@@ -1,0 +1,34 @@
+From: RetroOPI_Z3
+Subject: [PATCH] exfat: plug the directory readahead
+
+exfat_dir_readahead() reads ahead up to a whole cluster of a directory
+with one sb_breadahead() per sector. Each is its own 512-byte bio and,
+without a plug, each reaches the device as its own request: on a card
+with 128 KB clusters that is 256 requests, ~90 ms on an SD card, the
+first time any directory is touched -- however few entries it has.
+Listing a 29-folder exFAT root cold took 2.48 s; the RetroOPI launcher's
+scan of its ROM folders took 2.6 s of the boot. Plug the loop, as
+exfat_allocate_bitmap() already does for the bitmap readahead, so the
+block layer merges the bios into a few large requests.
+
+--- a/fs/exfat/dir.c	2026-10-07 09:11:44.740038514 +0300
++++ b/fs/exfat/dir.c	2026-10-07 09:11:44.761705180 +0300
+@@ -681,10 +681,18 @@
+ 
+ 	bh = sb_find_get_block(sb, sec);
+ 	if (!bh || !buffer_uptodate(bh)) {
++		struct blk_plug plug;
+ 		unsigned int i;
+ 
++		/*
++		 * Plug, as exfat_allocate_bitmap() does: each sb_breadahead() is a
++		 * separate 512-byte bio, and unplugged they reach the device as up
++		 * to ra_count separate requests (256 for a 128 KB cluster).
++		 */
++		blk_start_plug(&plug);
+ 		for (i = 0; i < ra_count; i++)
+ 			sb_breadahead(sb, (sector_t)(sec + i));
++		blk_finish_plug(&plug);
+ 	}
+ 	brelse(bh);
+ 	return 0;

@@ -58,6 +58,31 @@
 #include "gfx_accel.h"
 
 /* =========================================================================
+ * Startup timing: "STARTUP: <stage> <ms>" lines in the log, so the boot can be
+ * attributed stage by stage (the launcher is on the boot's critical path).
+ * ========================================================================= */
+
+/* Milliseconds since the first call. */
+static double startup_now_ms(void)
+{
+    static struct timespec t0;
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    if (t0.tv_sec == 0 && t0.tv_nsec == 0)
+        t0 = t;
+    return (t.tv_sec - t0.tv_sec) * 1000.0 + (t.tv_nsec - t0.tv_nsec) / 1e6;
+}
+
+/* Logs the time spent since the previous mark. */
+static void startup_mark(const char *stage)
+{
+    static double last;
+    double now = startup_now_ms();
+    printf("STARTUP: %-18s %5.0f ms\n", stage, now - last);
+    last = now;
+}
+
+/* =========================================================================
  * Configuration
  * ========================================================================= */
 
@@ -729,10 +754,29 @@ static bool rom_is_hidden(const char *path, int sys_idx)
 typedef struct {
     char **name;    /* file names referenced by the folder's .m3u files */
     int n, cap;
+    char **cue;     /* base names (no extension) of the folder's .cue files */
+    int ncue, capcue;
 } DiscSet;
 
+/* Appends a copy of the first len bytes of str to a growable string list. */
+static void strlist_add(char ***list, int *n, int *cap, const char *str, size_t len)
+{
+    if (*n == *cap) {
+        int c = *cap ? *cap * 2 : 16;
+        char **nl = realloc(*list, sizeof(char *) * (size_t)c);
+        if (!nl) return;
+        *list = nl;
+        *cap = c;
+    }
+    char *copy = strndup(str, len);
+    if (copy) (*list)[(*n)++] = copy;
+}
+
 /* Collect the entries of every .m3u in dir. Only plain names count: an entry
- * with a '/' points into a subfolder, which is never a top-level list entry. */
+ * with a '/' points into a subfolder, which is never a top-level list entry.
+ * Also collects the .cue names, so that a .bin can be matched to its cue sheet
+ * without a lookup per file: on exFAT a failed lookup scans the whole folder,
+ * which made 2,559 Atari 2600 .bin files cost ~0.4 s at boot. */
 static void discset_load(DiscSet *s, const char *dir)
 {
     memset(s, 0, sizeof(*s));
@@ -741,6 +785,10 @@ static void discset_load(DiscSet *s, const char *dir)
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         const char *dot = strrchr(de->d_name, '.');
+        if (dot && strcasecmp(dot, ".cue") == 0) {
+            strlist_add(&s->cue, &s->ncue, &s->capcue, de->d_name, (size_t)(dot - de->d_name));
+            continue;
+        }
         if (!dot || strcasecmp(dot, ".m3u") != 0) continue;
         char p[MAX_NAME];
         snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
@@ -751,15 +799,7 @@ static void discset_load(DiscSet *s, const char *dir)
             line[strcspn(line, "\r\n")] = '\0';     /* CRLF-tolerant */
             if (line[0] == '\0' || line[0] == '#' || strchr(line, '/'))
                 continue;
-            if (s->n == s->cap) {
-                int cap = s->cap ? s->cap * 2 : 16;
-                char **nn = realloc(s->name, sizeof(char *) * (size_t)cap);
-                if (!nn) break;
-                s->name = nn;
-                s->cap = cap;
-            }
-            s->name[s->n] = strdup(line);
-            if (s->name[s->n]) s->n++;
+            strlist_add(&s->name, &s->n, &s->cap, line, strlen(line));
         }
         fclose(f);
     }
@@ -770,6 +810,8 @@ static void discset_free(DiscSet *s)
 {
     for (int i = 0; i < s->n; i++) free(s->name[i]);
     free(s->name);
+    for (int i = 0; i < s->ncue; i++) free(s->cue[i]);
+    free(s->cue);
     memset(s, 0, sizeof(*s));
 }
 
@@ -779,13 +821,14 @@ static bool rom_is_disc_part(const char *dir, const char *name, const DiscSet *s
     for (int i = 0; i < s->n; i++)
         if (strcasecmp(s->name[i], name) == 0)
             return true;
-    /* .bin with a same-named .cue (exFAT and FAT look names up without case) */
+    /* .bin with a same-named .cue (exFAT and FAT match names without case) */
+    (void)dir;
     const char *dot = strrchr(name, '.');
     if (dot && strcasecmp(dot, ".bin") == 0) {
-        char cue[MAX_NAME];
-        snprintf(cue, sizeof(cue), "%s/%.*s.cue", dir, (int)(dot - name), name);
-        if (access(cue, F_OK) == 0)
-            return true;
+        size_t len = (size_t)(dot - name);
+        for (int i = 0; i < s->ncue; i++)
+            if (strlen(s->cue[i]) == len && strncasecmp(s->cue[i], name, len) == 0)
+                return true;
     }
     return false;
 }
@@ -1923,7 +1966,12 @@ static void menu_scan_systems(void)
          * game was in a subfolder. */
         char syspath[MAX_NAME];
         snprintf(syspath, sizeof(syspath), "%s/%s", ROMS_PATH, de->d_name);
-        if (count_roms_in_dir(syspath, sys_idx) == 0) continue;
+        double t0 = startup_now_ms();
+        int rc = count_roms_in_dir(syspath, sys_idx);
+        double dt = startup_now_ms() - t0;
+        if (dt > 20)
+            printf("MENU: counting %s took %.0f ms\n", de->d_name, dt);
+        if (rc == 0) continue;
 
         /* Check that the core exists */
         char corepath[MAX_NAME];
@@ -1936,8 +1984,7 @@ static void menu_scan_systems(void)
         e->is_favorite = false;
         strncpy(e->path, syspath, MAX_NAME - 1);
 
-        /* Count ROMs and include in display name */
-        int rc = count_roms_in_dir(syspath, sys_idx);
+        /* ROM count (from above) in the display name */
         e->rom_count = rc;
         snprintf(e->name, MAX_NAME, "%s (%d)", g_systems[sys_idx].display_name, rc);
     }
@@ -3683,8 +3730,7 @@ int main(int argc, char *argv[])
     setlinebuf(stdout);
     setlinebuf(stderr);
 
-    struct timespec ts_start, ts_ready;
-    clock_gettime(CLOCK_MONOTONIC, &ts_start);
+    startup_now_ms();	/* starts the clock */
 
     printf("=== RetroOPI Launcher ===\n");
     printf("Platform: Orange Pi Zero3 (Allwinner H618), %dx%d\n",
@@ -3699,10 +3745,12 @@ int main(int argc, char *argv[])
     /* Apply default theme */
     theme_apply(0);
 
+    startup_mark("sdl");
     if (drm_init() < 0) {
         fprintf(stderr, "FATAL: DRM init failed\n");
         return 1;
     }
+    startup_mark("drm");
     if (rga_init() < 0) {
         fprintf(stderr, "WARNING: RGA2 not available, using CPU rendering\n");
     }
@@ -3712,30 +3760,32 @@ int main(int argc, char *argv[])
         drm_cleanup();
         return 1;
     }
+    startup_mark("gfx");
     if (input_init() < 0) {
         fprintf(stderr, "WARNING: no gamepad, waiting for connection...\n");
         /* Don't fail - user might connect later */
     }
     touch_init();
+    startup_mark("input");
 
     /* Load persistent data */
     ensure_data_dir();
     favorites_load();
     recents_load();
+    startup_mark("favorites+recents");
 
     /* Scan for available systems */
     menu_scan_systems();
+    startup_mark("systems scan");
 
     /* Restore saved state (theme, position) */
     state_load();
 
     /* Initial draw */
     ui_draw();
+    startup_mark("state+draw");
 
-    clock_gettime(CLOCK_MONOTONIC, &ts_ready);
-    double startup_ms = (ts_ready.tv_sec - ts_start.tv_sec) * 1000.0 +
-                        (ts_ready.tv_nsec - ts_start.tv_nsec) / 1e6;
-    printf("STARTUP: ready in %.0f ms\n", startup_ms);
+    printf("STARTUP: ready in %.0f ms\n", startup_now_ms());
 
     /* Main loop */
     int dirty = 0;

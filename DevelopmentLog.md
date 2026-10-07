@@ -1063,3 +1063,39 @@ is empty. 0001's static check rejects it because it only allows calls to `rts; n
   hint the SH4 thread drops from 92.3% to 74.8% of a core, giving headroom for busy scenes. The
   user confirmed lap clock and sound. The earlier "bad sound in V-Rally" with the general analyzer
   was most likely this loop being skipped before the throttle existed, i.e. the game running fast.
+
+## 2026-10-07 — Boot time: ~14 s → under 10 s (exFAT readahead, launcher)
+
+Baseline by the user's stopwatch, power-on to menu: **~14 s**. Kernel-side (`/proc/uptime`), clean
+boot: init at 2.59 s, launcher started at 3.85 s, **launcher ready in 3,376 ms** (menu at ~7.2 s).
+So ~6–7 s happen before Linux starts. The first measured boot also had a 1.3 s ext4 journal
+recovery, from the previous power-off; clean reboots don't have it. The launcher does not load
+Mesa or libLLVM (it maps only SDL2/SDL2_image/SDL2_ttf), so the 65 MB libLLVM is not a boot cost.
+
+**The launcher now logs `STARTUP: <stage> <ms>`.** It showed `systems scan` at 2,583 ms, and in
+it every ROM folder at 88–101 ms, the empty `doom` folder included. The chase:
+- Not CPU: a warm restart scanned in 25 ms, a cold one (drop_caches) in 2.75 s. perf showed the
+  launcher idle, sleeping in the kernel.
+- Not the folder contents: a read-only parse of the raw exFAT directories showed them clean, with
+  no deleted-entry buildup and empty folders ending at entry 0. Cold `ls` of the empty `doom`
+  folder still took 0.18 s, and of the card's 29-folder root 2.48 s.
+- **The cause: `exfat_dir_readahead()`** issues one `sb_breadahead()` per 512-byte sector for a whole
+  128 KB cluster **without a block plug**, so the card got 256 separate requests (~90 ms) the
+  first time any folder was touched. `exfat_allocate_bitmap()` in the same driver plugs the same
+  pattern. **Kernel patch 0052 plugs it**: systems scan 2,583 → 633 ms.
+- Atari 2600 was still 430 ms: for each `.bin` the launcher did `access("<name>.cue")`, and on
+  exFAT each failed lookup scans the whole folder, quadratic over 2,559 files. `discset_load()`,
+  which already reads the folder for `.m3u` files, now also collects the `.cue` names, and the
+  check is in memory. The scan also counted every folder twice; now once.
+
+Result over three clean reboots: systems scan 220–245 ms, **launcher ready in 825–842 ms**, menu at
+**~4.5 s** kernel time. **Stopwatch: under 10 s** (user, after a reboot).
+
+Still there, for later:
+- **~5 s before the kernel**: SPL/DRAM, U-Boot, the 1 s bootdelay, and reading the 44.7 MB
+  uncompressed arm64 `Image`. A compressed image and/or a slimmer kernel are the candidates.
+- **Kernel → init 2.57 s**: the arm64 defconfig base carries drivers for hundreds of other boards.
+- **udev 0.8 s, ALSA 0.35 s.**
+- **Launcher remainder**: DRM 170 ms, fonts 190 ms, input 140 ms.
+A slimmer kernel config is the bigger change; a missing driver means no boot, so it wants the
+serial console attached.
