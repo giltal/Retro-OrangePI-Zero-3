@@ -3051,6 +3051,99 @@ static void ui_draw_preview(void)
     }
 }
 
+/* =========================================================================
+ * Marquee: the selected row's name scrolls when it does not fit
+ *
+ * Left, pause, back, pause, repeat. ui_draw_list() sets it up (a full redraw
+ * draws the name at the current offset); marquee_frame() advances it on the
+ * frames with nothing else to draw. A full redraw costs ~35 ms at 1080p, more
+ * than a 30 Hz frame, so marquee frames repaint only the name's strip. Both
+ * DRM buffers must then hold the same picture: after a full redraw the shown
+ * frame is copied into the other one once.
+ * ========================================================================= */
+
+#define MARQUEE_STEP    UI_SCALE(2)     /* px per frame (~30 Hz) */
+#define MARQUEE_HOLD    30              /* frames paused at each end */
+
+static struct {
+    bool active;            /* the selected name overflows (set each full redraw) */
+    bool sync;              /* a full frame went to only one buffer */
+    char text[MAX_NAME];
+    SDL_Surface *surf;      /* the whole name, rendered once */
+    SDL_Surface *win;       /* the visible window of it */
+    int x, y, w;            /* where the window goes */
+    int offset, dir, hold;
+} g_marquee;
+
+/* Draws text clipped to w, scrolling it if it overflows (the selected row). */
+static void marquee_draw_row(const char *text, int x, int y, int w)
+{
+    if (strcmp(text, g_marquee.text) != 0 || !g_marquee.surf) {
+        SDL_FreeSurface(g_marquee.surf);
+        SDL_FreeSurface(g_marquee.win);
+        g_marquee.surf = g_marquee.win = NULL;
+        snprintf(g_marquee.text, sizeof(g_marquee.text), "%s", text);
+        SDL_Color c = { (COL_TEXT >> 16) & 0xFF, (COL_TEXT >> 8) & 0xFF, COL_TEXT & 0xFF, 255 };
+        g_marquee.surf = TTF_RenderUTF8_Blended(g_font_list, text, c);
+        g_marquee.offset = 0;
+        g_marquee.dir = 1;
+        g_marquee.hold = MARQUEE_HOLD * 3 / 2;
+    }
+    if (!g_marquee.surf || !g_marquee.win || g_marquee.win->w != w) {
+        SDL_FreeSurface(g_marquee.win);
+        g_marquee.win = g_marquee.surf
+            ? SDL_CreateRGBSurface(0, w, g_marquee.surf->h, 32,
+                                   0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+            : NULL;
+    }
+    if (!g_marquee.surf || !g_marquee.win) {
+        gfx_draw_text(g_font_list, text, x, y, COL_TEXT, w);
+        return;
+    }
+    g_marquee.active = true;
+    g_marquee.x = x;
+    g_marquee.y = y;
+    g_marquee.w = w;
+    int max_off = g_marquee.surf->w - w;
+    if (g_marquee.offset > max_off) g_marquee.offset = max_off;
+    SDL_Rect clip = { g_marquee.offset, 0, w, g_marquee.surf->h };
+    SDL_FillRect(g_marquee.win, NULL, 0);
+    SDL_SetSurfaceBlendMode(g_marquee.surf, SDL_BLENDMODE_NONE);
+    SDL_BlitSurface(g_marquee.surf, &clip, g_marquee.win, NULL);
+    gfx_blit_surface(g_marquee.win, x, y);
+}
+
+/* One marquee step on a frame with nothing else to draw. */
+static void marquee_frame(void)
+{
+    if (!g_marquee.active || !g_marquee.surf) return;
+    if (g_marquee.hold > 0) {
+        g_marquee.hold--;
+        return;
+    }
+    int max_off = g_marquee.surf->w - g_marquee.w;
+    g_marquee.offset += g_marquee.dir * MARQUEE_STEP;
+    if (g_marquee.offset >= max_off) {
+        g_marquee.offset = max_off;
+        g_marquee.dir = -1;
+        g_marquee.hold = MARQUEE_HOLD;
+    } else if (g_marquee.offset <= 0) {
+        g_marquee.offset = 0;
+        g_marquee.dir = 1;
+        g_marquee.hold = MARQUEE_HOLD;
+    }
+#if PANEL_ROTATION != 180       /* (with rotation the render buffer keeps the whole frame) */
+    if (g_marquee.sync) {
+        memcpy(drm_backbuffer(), g_drm.fb[g_drm.front].pixels,
+               (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(pixel_t));
+        g_marquee.sync = false;
+    }
+#endif
+    gfx_fill_rect(g_marquee.x, g_marquee.y, g_marquee.w, g_marquee.surf->h, COL_HIGHLIGHT);
+    marquee_draw_row(g_marquee.text, g_marquee.x, g_marquee.y, g_marquee.w);
+    drm_flip();
+}
+
 /* Settings items' icons, in SettingItem order. */
 static const char *setting_icons[SETTING_COUNT] = {
     "theme", "volume", "n64quality", "favorites", "recents", "clearrecent", "restart", "poweroff",
@@ -3060,6 +3153,7 @@ static void ui_draw_list(void)
 {
     /* The list ends where the cover-art panel starts (ROM lists only) */
     int list_w = preview_shown() ? SCREEN_WIDTH - PREVIEW_W : SCREEN_WIDTH;
+    g_marquee.active = false;      /* set again below if the selected name overflows */
     int visible = MAX_VISIBLE;
     if (g_menu.count < visible) visible = g_menu.count;
 
@@ -3111,7 +3205,13 @@ static void ui_draw_list(void)
             text_x += box + UI_SCALE(10);
             text_max_w -= box + UI_SCALE(10);
         }
-        gfx_draw_text(g_font_list, e->name, text_x, text_y, COL_TEXT, text_max_w);
+        int name_w = 0;
+        if (idx == g_menu.selected)
+            TTF_SizeUTF8(g_font_list, e->name, &name_w, NULL);
+        if (name_w > text_max_w)
+            marquee_draw_row(e->name, text_x, text_y, text_max_w);     /* scrolls */
+        else
+            gfx_draw_text(g_font_list, e->name, text_x, text_y, COL_TEXT, text_max_w);
 
         /* Favorite star (filled polygon) */
         if (show_star) {
@@ -3220,6 +3320,7 @@ static void ui_draw(void)
     ui_draw_jump_hint();
 
     drm_flip();
+    g_marquee.sync = true;         /* the other buffer still has the previous frame */
 }
 
 /* =========================================================================
@@ -4249,6 +4350,8 @@ int main(int argc, char *argv[])
 
         if (dirty) {
             ui_draw();
+        } else {
+            marquee_frame();       /* scroll an overflowing selected name */
         }
 
         /* ~30 FPS polling rate */

@@ -1218,3 +1218,15 @@ none shows its console's pixel icon there. The art is decoded only when the sele
   `select`s `BR2_PACKAGE_JPEG` (next to its existing `select BR2_PACKAGE_LIBPNG`, for the same
   reason). SDL2_image decodes with its built-in stb_image (`LOAD_JPG=1`), so it gains no runtime
   dependency.
+
+### Launcher: long names scroll (marquee) on the selected row
+
+Names wider than their row were hard-clipped. Now the selected row's name, if it overflows,
+waits ~1.5 s, scrolls left to its end at `UI_SCALE(2)` px per frame (~135 px/s at 1080p), pauses
+1 s, scrolls back, and repeats; other rows stay clipped. It works in every list.
+- **Partial repaint:** a full redraw costs ~35 ms at 1080p (the `state+draw` startup stage), more
+  than a 30 Hz frame. So the marquee repaints only the name's strip on frames with nothing else
+  to draw: highlight colour, then a window of the name, rendered once into a surface.
+- **Two DRM buffers:** both must hold the same picture for that, so after every full redraw the
+  shown frame is copied into the other buffer once (`g_marquee.sync`).
+Confirmed by the user ("works as expected").
