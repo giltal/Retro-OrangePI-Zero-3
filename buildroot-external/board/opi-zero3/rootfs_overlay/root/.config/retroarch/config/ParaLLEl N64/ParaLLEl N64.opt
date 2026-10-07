@@ -34,9 +34,11 @@ parallel-n64-rspplugin = "hle"
 #
 # On the reference board (Mali-400) this had to be 320x240: 640x480 only
 # reached ~91% speed there, because that GPU was geometry-bound. The Mali-G31
-# here has no such limit. The user played N64 at 640x480 (via Settings ->
-# N64 Quality) and reports it smooth, 2026-09-23 (by eye, not yet measured).
-# The Settings toggle still switches back to 320x240 if a title struggles.
+# here has no such limit. The user played N64 at 640x480 and reports it
+# smooth, 2026-09-23 (by eye, not yet measured). Fixed at 640x480 since
+# 2026-10-07, the user's call: the launcher's "N64 Quality" toggle (and its
+# /usr/sbin/n64-hires helper) were removed. RetroArch's own core options can
+# still change it per game.
 parallel-n64-screensize = "640x480"
 
 parallel-n64-framerate = "original"

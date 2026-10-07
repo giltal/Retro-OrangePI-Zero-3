@@ -2632,7 +2632,6 @@ static bool menu_jump_letter(int dir)
 typedef enum {
     SETTING_THEME,
     SETTING_VOLUME,
-    SETTING_N64_QUALITY,
     SETTING_FAVORITES,
     SETTING_RECENTS,
     SETTING_CLEAR_RECENTS,
@@ -2644,7 +2643,6 @@ typedef enum {
 static const char *setting_names[] = {
     "Color Theme",
     "Volume",
-    "N64 Quality",
     "View Favorites",
     "Recently Played",
     "Clear Recent",
@@ -2765,38 +2763,6 @@ static int volume_query(void)
     if (pct < 0) return g_volume;          /* unreadable: keep what we had */
     if (pct > 100) pct = 100;
     return pct;
-}
-
-/*
- * N64 quality toggle: parallel-n64 at 320x240 or 640x480.
- *
- * On the A33 this also raised the Mali-400's clock, because that GPU was
- * geometry-bound (see the reference DevelopmentLog). The Mali-G31 here has no
- * such hack. The toggle is just the resolution, and which one is the right
- * default on this GPU has yet to be measured.
- *
- * NO SEPARATE COPY OF THIS STATE IS KEPT. The .opt file is the single source of
- * truth and is read back each time. Keeping a duplicate in state.txt is what
- * made the volume setting silently revert on the reference board -- two
- * writers, two scales, one control.
- */
-static int n64_hires_get(void)
-{
-    FILE *p = popen("grep -c \"^parallel-n64-screensize = \\\"640x480\\\"\" '/root/.config/retroarch/config/ParaLLEl N64/ParaLLEl N64.opt' 2>/dev/null", "r");
-    int n = 0;
-
-    if (!p) return 0;
-    if (fscanf(p, "%d", &n) != 1) n = 0;
-    pclose(p);
-    return n > 0;
-}
-
-static void n64_hires_set(int on)
-{
-    if (system(on ? "/usr/sbin/n64-hires on >/dev/null 2>&1"
-                  : "/usr/sbin/n64-hires off >/dev/null 2>&1") == -1) {
-        /* best effort: the Settings value is re-read from the .opt anyway */
-    }
 }
 
 static void menu_load_settings(void)
@@ -3146,7 +3112,7 @@ static void marquee_frame(void)
 
 /* Settings items' icons, in SettingItem order. */
 static const char *setting_icons[SETTING_COUNT] = {
-    "theme", "volume", "n64quality", "favorites", "recents", "clearrecent", "restart", "poweroff",
+    "theme", "volume", "favorites", "recents", "clearrecent", "restart", "poweroff",
 };
 
 static void ui_draw_list(void)
@@ -3229,8 +3195,6 @@ static void ui_draw_list(void)
             } else if (idx == SETTING_VOLUME) {
                 snprintf(val_buf, sizeof(val_buf), "%d%%", g_volume);
                 val_str = val_buf;
-            } else if (idx == SETTING_N64_QUALITY) {
-                val_str = n64_hires_get() ? "640x480" : "320x240";
             } else if (idx == SETTING_CLEAR_RECENTS) {
                 snprintf(val_buf, sizeof(val_buf), "%d items", g_recents_count);
                 val_str = val_buf;
@@ -4230,9 +4194,6 @@ int main(int argc, char *argv[])
                         volume_apply(g_volume + 10);
                         state_save();
                         dirty = 1;
-                    } else if (sel == SETTING_N64_QUALITY) {
-                        n64_hires_set(!n64_hires_get());
-                        dirty = 1;
                     } else if (sel == SETTING_FAVORITES) {
                         menu_load_favorites();
                         dirty = 1;
@@ -4311,12 +4272,6 @@ int main(int argc, char *argv[])
                 g_current_theme = (g_current_theme + 1) % NUM_THEMES;
                 theme_apply(g_current_theme);
                 state_save();
-                dirty = 1;
-            }
-        }
-        if (g_menu.mode == MENU_SETTINGS && g_menu.selected == SETTING_N64_QUALITY) {
-            if (g_input.pressed & (BTN_LEFT_MASK | BTN_RIGHT_MASK)) {
-                n64_hires_set(!n64_hires_get());
                 dirty = 1;
             }
         }

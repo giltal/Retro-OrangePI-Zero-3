@@ -28,6 +28,8 @@ fail() {
 rm -f "$TARGET_DIR/etc/init.d/S35alsa"
 # Renamed 2026-09-24 before it ever shipped: S46ppsspp -> S46card.
 rm -f "$TARGET_DIR/etc/init.d/S46ppsspp"
+# Removed 2026-10-07 with the launcher's "N64 Quality" toggle (N64 is fixed at 640x480).
+rm -f "$TARGET_DIR/usr/sbin/n64-hires"
 
 # --- Bring-up: a login prompt on the HDMI console -----------------------
 # Buildroot's inittab only runs a getty on the serial port. If the launcher

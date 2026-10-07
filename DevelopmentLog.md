@@ -1230,3 +1230,23 @@ waits ~1.5 s, scrolls left to its end at `UI_SCALE(2)` px per frame (~135 px/s a
 - **Two DRM buffers:** both must hold the same picture for that, so after every full redraw the
   shown frame is copied into the other buffer once (`g_marquee.sync`).
 Confirmed by the user ("works as expected").
+
+### Shaders: hq2x-smooth for Atari 2600 and NES too
+
+The user set hq2x-smooth for the Atari 2600 from RetroArch's menu. RetroArch saved it as a core
+preset (`Stella 2023/Stella 2023.glslp`) referencing the test collection on the ROM card. It is
+now a folder preset like the others, `config/Stella 2023/atari2600.glslp`, referencing the
+shipped `/usr/share/retroopi/shaders/hq2x-smooth.glslp`; the card-referencing core preset was
+removed from the board. Then the same for NES (FCEUmm): `config/FCEUmm/nes.glslp`, replacing the
+user's `FCEUmm.glslp` core preset. Defaults now: gb/gbc xBR-lv2 2x mediump, gba hq2x-halphon
+mediump, atari800, atari2600 and nes hq2x-smooth. The 2600 and NES are not measured (both smaller
+sources than the Atari 800, which runs it at full speed).
+
+### N64 fixed at 640x480; the launcher's "N64 Quality" toggle removed
+
+The user's call: the Mali-G31 handles parallel-n64 at 640x480 easily, so the Settings toggle
+(320x240/640x480) is gone. Removed: the Settings item, its two helpers, its icon, and
+`/usr/sbin/n64-hires`. post-build.sh now `rm -f`s the last, since a removed overlay file
+survives in an incremental target/. The shipped `ParaLLEl N64.opt` already had
+`parallel-n64-screensize = "640x480"`; its comment now says it is fixed, and the board's copy
+was confirmed at 640x480. RetroArch's own core options can still change it per game.
