@@ -94,7 +94,12 @@ kernel)
 	R=/mnt/c/OrangePI_Projects/RetroOPI_Z3/buildroot-external/board/opi-zero3/rootfs_overlay
 	# Keep the last known-good set, so a bad kernel is recoverable from the
 	# U-Boot prompt on the serial console instead of by reflashing the card.
-	rsh "cd /boot && cp -n Image Image.prev && cp -n $DTB $DTB.prev && cp -n extlinux/extlinux.conf extlinux/extlinux.conf.prev; true"
+	rsh "cd /boot && cp -n Image Image.prev && cp -n $DTB $DTB.prev && cp -n extlinux/extlinux.conf extlinux/extlinux.conf.prev; [ -f Image.lz4 ] && cp -n Image.lz4 Image.lz4.prev; true"
+	# extlinux.conf boots Image.lz4 and falls back to Image (see post-build.sh,
+	# which makes the image build's copy the same way).
+	LZ4="$HOME/opi/output/host/bin/lz4"; [ -x "$LZ4" ] || LZ4=$(command -v lz4)
+	"$LZ4" -9 -f -q "$I/Image" "$I/Image.lz4"
+	rcp "$I/Image.lz4" "root@$BOARD:/boot/Image.lz4.new"
 	rcp "$I/Image" "root@$BOARD:/boot/Image.new"
 	rcp "$I/$DTB" "root@$BOARD:/boot/$DTB.new"
 	rcp "$R/boot/extlinux/extlinux.conf" "root@$BOARD:/boot/extlinux/extlinux.conf.new"
@@ -110,10 +115,10 @@ kernel)
 		sed -i 's/\r\$//' extlinux/extlinux.conf.new
 		grep -q '^ *kernel /boot/Image' extlinux/extlinux.conf.new
 		grep -q 'root=/dev/mmcblk0p1' extlinux/extlinux.conf.new
-		mv Image.new Image; mv $DTB.new $DTB; mv extlinux/extlinux.conf.new extlinux/extlinux.conf
+		mv Image.new Image; mv Image.lz4.new Image.lz4; mv $DTB.new $DTB; mv extlinux/extlinux.conf.new extlinux/extlinux.conf
 		sync
-		echo \"board Image: \$(md5sum Image | cut -d' ' -f1)\""
-	echo "host  Image: $(md5sum "$I/Image" | cut -d' ' -f1)"
+		echo \"board Image: \$(md5sum Image | cut -d' ' -f1)  Image.lz4: \$(md5sum Image.lz4 | cut -d' ' -f1)\""
+	echo "host  Image: $(md5sum "$I/Image" | cut -d' ' -f1)  Image.lz4: $(md5sum "$I/Image.lz4" | cut -d' ' -f1)"
 	echo "Reboot to use it. Fallback: Image.prev / $DTB.prev / extlinux.conf.prev"
 	;;
 run)

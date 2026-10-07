@@ -1099,3 +1099,30 @@ Still there, for later:
 - **Launcher remainder**: DRM 170 ms, fonts 190 ms, input 140 ms.
 A slimmer kernel config is the bigger change; a missing driver means no boot, so it wants the
 serial console attached.
+
+### Boot: U-Boot bootdelay 0, LZ4-compressed kernel (~9 s)
+
+- **bootdelay 1 → 0** (the user's call; `uboot-fastboot.config`). 0 still checks the serial console
+  once, so a key held from power-on still reaches the U-Boot prompt.
+- **LZ4 kernel.** U-Boot now reads `/boot/Image.lz4` (19.4 MB) instead of the 44.7 MB `Image` and
+  unpacks it in memory. Points that mattered:
+  - `booti` recognises compression from the first two bytes and unpacks into
+    `kernel_comp_addr_r` (sunxi defines it, with `kernel_comp_size` 0xb000000).
+  - U-Boot's `ulz4fn()` accepts only the **LZ4 frame format with independent blocks**. The
+    kernel's own `make Image.lz4` writes the legacy format (magic 02 21), which booti does not
+    recognise at all. So `post-build.sh` makes it with `lz4 -9` (Buildroot's host lz4 if built,
+    else the build host's) and checks the header: magic 04 22 4D 18, FLG & 0xE0 == 0x60.
+  - **Safety without a serial console:** `extlinux.conf` keeps the plain `Image` as a second label.
+    U-Boot's pxe code tries unattempted labels in order when one fails. That label adds
+    `retroopi.boot=uncompressed` to the command line, so a boot that fell back shows in
+    `/proc/cmdline`. `post-build.sh` checks the two append lines match apart from that marker.
+    `board.sh kernel` installs both files.
+- The first `board.sh kernel` hit a **full rootfs** while unpacking modules. Its final step never
+  ran, so nothing was half-installed. Freed ~250 MB: partial and backup module trees, and the
+  Flycast/RetroArch test backups from the Dreamcast work.
+- U-Boot was written to the card at 8 KB, as `genimage.cfg` lays it out, with `conv=fsync`, and
+  read back from the card with caches dropped: md5 identical. The previous bootloader area is saved
+  on the build host as `~/opi/uboot-backup-before-bootdelay0.bin`.
+- Verified: boots the LZ4 label (no marker in `/proc/cmdline`). **Stopwatch: 9 s** (the user, a
+  `reboot` including shutdown), from "under 10 s"; ~14 s at the start of the pass. Kernel side
+  unchanged: init 2.57 s, menu ~4.45 s.
