@@ -1173,3 +1173,22 @@ ends with **Restart** and **Power Off**:
 
 Tested by the user: Restart reboots to the menu; after Power Off, unplug and power on, the root
 filesystem mounted with **no journal recovery**, i.e. the shutdown was clean.
+
+### Launcher: pixel-art icons (systems, Settings, header ship)
+
+The user asked for console icons (searched for on the web) and an invader ship in the header.
+- **The search:** free retro console icon sets turned up only under licences that don't fit a
+  public repo. The closest retro set is CC BY-NC-SA; the CC0 sets are modern controllers; theme
+  packs use the companies' logos. So the icons are **original 16x16 pixel art**, drawn as text in
+  `scripts/gen-icons.py`: each console's silhouette in its colours, no logos. The six arcade
+  systems are cabinets in different colours, Doom a demon face, and Favorites/Recents a star and a
+  clock. The user kept the ⚙ glyph for Settings.
+- **Settings items** have icons too: palette, speaker, monitor, trash can, a restart arrow and a
+  power symbol. The last two are rings computed by a helper in the generator.
+- **Resolution:** the generator upscales with **Scale2x** twice to 64x64, which rounds staircase
+  edges while keeping every shape and colour. The palette is unchanged, so icons stay a palette
+  plus one digit per pixel in `launcher/icons.h` (generated and committed, so the build needs no
+  Python). The header ship stays at its blocky 16x16 (`NO_UPSCALE`, the user's choice), drawn 4x.
+- **Launcher:** `gfx_draw_icon()` draws each pixel as a scale x scale block, nearest neighbour.
+  The systems and Settings lists get an icon column, which moves the names right; the ship sits
+  before "RETRO LAUNCHER". Startup is unchanged (~230 ms ready on a restart).
