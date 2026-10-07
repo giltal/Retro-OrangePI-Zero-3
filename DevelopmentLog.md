@@ -1156,3 +1156,20 @@ overlaps udev), **launcher start 2.27 → 1.94 s**. The gamepad was found and bo
 
 Boot-time pass, power-on to menu by stopwatch: **~14 s → ~6 s**. Kernel side, the menu is ready
 ~2.7 s after kernel entry (from ~7.2 s).
+
+### Launcher: Restart and Power Off in Settings
+
+The Zero3 has no power button (the reference's clean power-off, volumed's KEY_POWER, has
+nothing to listen to here), so the only way off was pulling the plug. The next boot then spent
+1.3 s on ext4 journal recovery, and a game save written seconds before could be lost. Settings now
+ends with **Restart** and **Power Off**:
+- **Confirmation:** the first A shows "Press A again to confirm"; another A within ~3 s acts, and
+  any other button, a move off the item, or the timeout disarms it.
+- **Sequence:** save the launcher state, draw "Restarting…" / "Shutting down…", sync, then busybox
+  `reboot` / `poweroff`, and wait for init's SIGTERM without redrawing the menu.
+- **Power stays on:** the AXP313A is not a `system-power-controller` in the DT, so power-off halts
+  and the board stays powered. The screen says to unplug once it goes blank, and the same message
+  goes to /dev/tty1, the console shown once the launcher has exited.
+
+Tested by the user: Restart reboots to the menu; after Power Off, unplug and power on, the root
+filesystem mounted with **no journal recovery**, i.e. the shutdown was clean.

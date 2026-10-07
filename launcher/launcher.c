@@ -2612,6 +2612,8 @@ typedef enum {
     SETTING_FAVORITES,
     SETTING_RECENTS,
     SETTING_CLEAR_RECENTS,
+    SETTING_RESTART,
+    SETTING_POWER_OFF,
     SETTING_COUNT
 } SettingItem;
 
@@ -2622,7 +2624,63 @@ static const char *setting_names[] = {
     "View Favorites",
     "Recently Played",
     "Clear Recent",
+    "Restart",
+    "Power Off",
 };
+
+/*
+ * Restart / Power Off.
+ *
+ * The Zero3 has no power button: the reference's clean power-off (volumed's
+ * KEY_POWER) has nothing to listen to here. So the only way off was pulling the
+ * plug -- after which the next boot spent 1.3 s recovering the ext4 journal,
+ * and a save written seconds before could be lost.
+ *
+ * Both need confirming: the first A arms the item ("Press A again"), a second
+ * A within ~3 s acts, and anything else disarms it.
+ *
+ * The AXP313A PMIC is not a system-power-controller in the device tree, so
+ * "power off" halts the system and the board stays powered: what the user
+ * needs to know is when unplugging is safe. That message also goes to the text
+ * console, which is what the screen shows once the launcher has exited.
+ */
+static int g_power_armed = -1;      /* SETTING_RESTART / SETTING_POWER_OFF, or -1 */
+static int g_power_armed_frames;    /* main-loop frames (~30 Hz) left to confirm */
+static volatile bool g_running;     /* defined with the main loop */
+
+/* Returns once init's SIGTERM has cleared g_running: the caller must leave the
+ * main loop without drawing, or the menu would replace the message. */
+static void power_action(bool restart)
+{
+    state_save();
+
+    gfx_clear(COL_BG);
+    gfx_draw_text_centered(g_font_header, restart ? "Restarting..." : "Shutting down...",
+                           SCREEN_HEIGHT / 2 - UI_SCALE(40), COL_TEXT);
+    if (!restart)
+        gfx_draw_text_centered(g_font_list, "Unplug the power once the screen goes blank",
+                               SCREEN_HEIGHT / 2 + UI_SCALE(10), COL_TEXT_DIM);
+    drm_flip();
+
+    if (!restart) {
+        FILE *tty = fopen("/dev/tty1", "w");
+        if (tty) {
+            fprintf(tty, "\n\n\n    Shutting down. It is safe to unplug the power in a few seconds.\n");
+            fclose(tty);
+        }
+    }
+
+    sync();
+    printf("POWER: %s\n", restart ? "reboot" : "poweroff");
+    /* busybox reboot/poweroff signal init and return; init then stops the
+     * services (this launcher included, with SIGTERM) and unmounts. */
+    if (system(restart ? "reboot" : "poweroff") == -1) {
+        fprintf(stderr, "POWER: %s failed: %s\n", restart ? "reboot" : "poweroff", strerror(errno));
+        return;
+    }
+    while (g_running)
+        pause();
+}
 
 /*
  * Volume control.
@@ -2903,6 +2961,8 @@ static void ui_draw_list(void)
             } else if (idx == SETTING_CLEAR_RECENTS) {
                 snprintf(val_buf, sizeof(val_buf), "%d items", g_recents_count);
                 val_str = val_buf;
+            } else if (idx == g_power_armed) {
+                val_str = "Press A again to confirm";
             }
             if (val_str) {
                 int tw;
@@ -3909,6 +3969,17 @@ int main(int argc, char *argv[])
                         recents_save();
                         menu_load_settings();
                         dirty = 1;
+                    } else if (sel == SETTING_RESTART || sel == SETTING_POWER_OFF) {
+                        if (g_power_armed == sel) {
+                            g_power_armed = -1;
+                            power_action(sel == SETTING_RESTART);
+                            if (!g_running)
+                                continue;   /* shutting down: leave without a redraw */
+                        } else {
+                            g_power_armed = sel;
+                            g_power_armed_frames = 90;     /* ~3 s */
+                        }
+                        dirty = 1;
                     }
                 } else {
                     /* Launch game (ROMS, FAVORITES, or RECENTS mode) */
@@ -3985,6 +4056,15 @@ int main(int argc, char *argv[])
                 state_save();
                 dirty = 1;
             }
+        }
+
+        /* Disarm a pending Restart / Power Off: timed out, another button, or
+         * the selection left it. (The A that armed it is this frame's press.) */
+        if (g_power_armed >= 0 &&
+            (--g_power_armed_frames <= 0 || (g_input.pressed & ~BTN_A_MASK) ||
+             g_menu.mode != MENU_SETTINGS || g_menu.selected != g_power_armed)) {
+            g_power_armed = -1;
+            dirty = 1;
         }
 
         /* Expire the letter-jump overlay. The redraw at zero is what removes
